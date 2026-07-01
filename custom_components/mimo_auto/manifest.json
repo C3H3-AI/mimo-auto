@@ -1,0 +1,9 @@
+{
+  "domain": "mimo_auto",
+  "name": "MiMo Auto",
+  "version": "1.0.0",
+  "requirements": [],
+  "codeowners": ["@home-assistant"],
+  "config_flow": true,
+  "loggers": ["mimo_auto"]
+}
