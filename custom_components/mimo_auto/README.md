@@ -19,12 +19,12 @@
 ```
 
 两种模式：
-- **Docker HA + 宿主机模式（已验证）**：HA 跑在 Docker 容器内，宿主机运行 `mimo serve`，通过 host networking 连接。适用于 Home Assistant OS / Supervised 部署
-- **本地模式**：HA 直接启动 `mimo serve` 子进程。适用于 Core / Container 直接安装在系统上的场景
+- **Docker HA + 宿主机模式**（已验证）：HA 跑在 Docker 容器内，宿主机运行 `mimo serve`，通过 host networking 连接
+- **本地模式**：HA 直接启动 `mimo serve` 子进程（适用于 HA Core 直接安装在系统上的场景）
 
 ## 安装
 
-### ✅ 已验证的安装方式（HA OS / Docker + 宿主机）
+### 验证环境
 
 本集成已在以下环境验证通过：
 
@@ -35,52 +35,54 @@
 | 部署方式 | Docker 容器 + 宿主机 `mimo serve` |
 | 网络模式 | host networking |
 
-**宿主机上安装 mimo：**
+### 前置要求
+
+- Home Assistant 容器（host networking 模式）或 Supervised 部署
+- 宿主机有 `bash`、`node`、`npm`（Alpine 上 `apk add nodejs npm`）
+
+### 1️⃣ 宿主机安装 mimo
 
 ```bash
-# 1. 安装 Node.js（如已安装可跳过）
+# 安装 Node.js（如已有可跳过）
 apk add nodejs npm
 
-# 2. 全局安装 mimo CLI
+# 全局安装 mimo CLI
 npm install -g @mimo-ai/cli
 
-# 3. 验证安装
+# 验证
 mimo --version
+```
 
-# 4. 手动启动服务
+**⚠️ Alpine Linux（musl）注意：**
+npm 会自动拉取 `mimocode-linux-arm64-musl` 版本，但默认包装脚本可能找到 glibc 版本导致运行失败。验证方法：
+
+```bash
+# 检查实际安装的平台二进制
+ls /usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/
+# 输出应包含 mimocode-linux-arm64-musl/
+
+# 如果默认 mimo 命令报错，用绝对路径启动 musl 版本
+/usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/mimocode-linux-arm64-musl/bin/mimo serve --port 14096
+```
+
+### 2️⃣ 启动服务并设置开机自启
+
+```bash
+# 手动启动（调试用）
 mimo serve --port 14096 --print-logs
 
-# 5. 设置开机自启（Alpine / OpenRC）
+# 设置开机自启（Alpine / OpenRC）
 cat > /etc/local.d/mimoserve.start << 'EOF'
 #!/bin/sh
 MIMO_BIN=$(which mimo)
 nohup "$MIMO_BIN" serve --port 14096 --print-logs >> /var/log/mimo-serve.log 2>&1 &
 EOF
 chmod +x /etc/local.d/mimoserve.start
+rc-update add local
 /etc/local.d/mimoserve.start
 ```
 
-**⚠️ Alpine Linux（musl）注意：**
-Alpine 系统上 `npm install -g @mimo-ai/cli` 会自动拉取 `mimocode-linux-arm64-musl` 版本。但默认的 `mimo` 包装脚本可能找到 glibc 版本导致无法运行，推荐用以下方法之一：
-
-```bash
-# 方法 A：检查实际运行的二进制
-ls /usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/
-# 输出应包含 mimocode-linux-arm64-musl/
-
-# 方法 B：如果默认 mimo 命令报错，直接用 musl 版本启动
-/usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/mimocode-linux-arm64-musl/bin/mimo serve --port 14096
-```
-
-### 其他安装方式
-
-**macOS / Linux（glibc）：**
-
-```bash
-curl -fsSL https://mimo.xiaomi.com/install | bash
-# 或
-npm install -g @mimo-ai/cli
-```
+### 3️⃣ 部署组件到 HA 容器
 
 ### 3️⃣ 部署组件
 
