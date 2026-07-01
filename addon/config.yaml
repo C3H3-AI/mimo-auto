@@ -9,6 +9,10 @@ arch:
   - armv7
 init: false
 ingress: false
+host_network: true
+apparmor: false
+startup: application
+boot: auto
 panel_icon: mdi:chat-processing
 panel_title: MiMo Code
 homeassistant: "2024.1.0"
