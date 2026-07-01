@@ -38,9 +38,20 @@
 ### 前置要求
 
 - Home Assistant 容器（host networking 模式）或 Supervised 部署
-- 宿主机有 `bash`、`node`、`npm`（Alpine 上 `apk add nodejs npm`）
+- 可通过 Add-on 商店安装，或手动在宿主机安装 Node.js
 
-### 1️⃣ 宿主机安装 mimo
+### 方式一（推荐）：通过 Add-on 安装
+> 适用于 HA OS / Supervised 部署
+
+仓库地址：`https://github.com/C3H3-AI/mimo-auto`
+
+```
+设置 → 加载项商店 → 右上角三个点 → 仓库 → 添加 https://github.com/C3H3-AI/mimo-auto
+```
+
+刷新后找到 **MiMo Code** add-on，安装即可。Add-on 会自动安装 `mimo` 并在后台运行 `mimo serve`。
+
+### 方式二：宿主机手动安装
 
 ```bash
 # 安装 Node.js（如已有可跳过）

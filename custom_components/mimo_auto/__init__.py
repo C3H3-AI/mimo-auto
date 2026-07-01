@@ -38,7 +38,7 @@ from .coordinator import MiMoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.CONVERSATION]
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -127,12 +127,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "agent_impl": agent_impl,
     }
 
-    # Register conversation agent
-    from homeassistant.components import conversation as ha_conversation
-    ha_conversation.async_set_agent(hass, entry, agent_impl)
-
     # Register services
     await _async_register_services(hass)
+
+    # Register MiMo Chat panel
+    await _async_register_panel(hass)
 
     # Register update listener for config entry changes
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
