@@ -13,6 +13,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    ADDON_SLUG,
     CONF_AUTO_INSTALL,
     CONF_MIMO_BIN,
     CONF_PORT,
@@ -85,6 +86,15 @@ class MiMoCoordinator:
         async with self._lock:
             if self.is_running:
                 _LOGGER.warning("MiMo server is already running")
+                return True
+
+            # Step 0: Try detecting HA Add-on via Supervisor API
+            if await self._detect_addon():
+                _LOGGER.info(
+                    "Connected to MiMo Code add-on at %s",
+                    self._server_url,
+                )
+                self._mark_running()
                 return True
 
             # Step 1: Try connecting to an existing server first
@@ -411,6 +421,36 @@ class MiMoCoordinator:
                 _LOGGER.debug("Server check %s failed: %s", path, err)
                 continue
         return False
+
+    async def _detect_addon(self) -> bool:
+        """Detect if the MiMo Code add-on is running via Supervisor API.
+
+        This only works on HA Supervised/OS installations. On Docker + host
+        networking setups (the current deployment), this returns False and
+        falls through to the existing external server check.
+        """
+        try:
+            # Only available on Supervised/OS installs
+            if "hassio" not in self._hass.config.components:
+                return False
+
+            from homeassistant.components.hassio import async_get_addon_info
+
+            info = await async_get_addon_info(self._hass, ADDON_SLUG)
+            if not info:
+                return False
+
+            state = info.get("state") if isinstance(info, dict) else None
+            if state != "started":
+                return False
+
+            _LOGGER.info("Detected MiMo Code add-on is running")
+            return await self._check_server_healthy()
+
+        except (ImportError, ModuleNotFoundError):
+            return False
+        except Exception:
+            return False
 
     async def _wait_for_server_ready(self, timeout: int) -> bool:
         """Poll the server until it responds or timeout is reached.

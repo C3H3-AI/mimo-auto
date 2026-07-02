@@ -1,0 +1,3 @@
+#!/usr/bin/execlineb -S0
+# s6 will restart the service automatically on exit
+# This file exists to ensure s6 treats this as a longrun service

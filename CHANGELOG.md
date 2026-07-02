@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.1.1 (2026-07-03)
+
+### 🔧 修复
+
+- **Add-on 网络隔离** — `host_network` 改为 `true`，集成可通过 `127.0.0.1` 连接 add-on 内的 `mimo serve`
+- **Add-on 可配置端口** — WebUI server.py 从环境变量读取 `MIMO_PORT`，响应 add-on 配置的端口
+- **版本对齐** — add-on config.yaml 版本与 manifest.json 同步为 2.1.1
+
+## v2.1.0 (2026-07-02)
+
+### ✨ 新增
+
+- **HA Add-on 支持** — 新增 `mimo-code/` 目录，完整的 HA Add-on 实现（Dockerfile、config.yaml、build.yaml、s6-overlay 服务管理）
+- **多架构构建** — add-on 支持 `aarch64` / `amd64` / `armv7` 三种架构
+- **Add-on 自动检测** — 集成 `start_server()` 增加 Step 0：通过 Supervisor API 自动检测 add-on 是否运行，HA OS/Supervised 用户开箱即用
+- **s6-overlay 进程管理** — add-on 使用 s6-overlay 管理 `mimo serve` 生命周期，崩溃自动重启
+- **看门狗** — config.yaml 配置 `watchdog` 端点，Supervisor 自动健康检查
+- **CI 自动化** — GitHub Actions 自动构建多架构 Docker 镜像并创建 GitHub Release
+
+### 🔧 优化
+
+- **Docker 多阶段构建** — Node.js 镜像安装 npm 包 → HA 基础镜像仅复制原生二进制，无需 Node.js 运行时，镜像体积更小
+
 ## v2.0.1 (2026-07-02)
 
 ### 🔧 修复

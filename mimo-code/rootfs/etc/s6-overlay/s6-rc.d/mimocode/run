@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bashio
+# ============================================================
+# MiMo Code AI Server — S6 Service Entry
+# Managed by s6-overlay, auto-restarts on crash
+# ============================================================
+
+PORT=$(bashio::config 'port')
+
+exec /usr/local/bin/mimo serve --port "${PORT}"

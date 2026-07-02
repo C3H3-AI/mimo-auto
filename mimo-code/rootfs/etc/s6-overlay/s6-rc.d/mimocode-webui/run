@@ -1,0 +1,4 @@
+#!/usr/bin/with-contenv bashio
+
+MIMO_PORT=$(bashio::config 'port')
+exec env MIMO_PORT="${MIMO_PORT}" /usr/bin/python3 /usr/share/mimocode/webui/server.py
