@@ -4,8 +4,13 @@
 # Managed by s6-overlay, auto-restarts on crash
 # ============================================================
 
-# Switch to /config so mimo can create its project files (.mimocode/, etc.)
-cd /config || exit 1
+# Use /data/mimocode as working directory so mimo can create its project files
+mkdir -p /data/mimocode /data/mimocode/.mimocode && cd /data/mimocode || exit 1
+
+# Create project config with MiMo Auto as default model
+cat > /data/mimocode/.mimocode/mimocode.json << 'EOF'
+{"model": "mimo/mimo-auto"}
+EOF
 
 CONFIG_PATH=/data/options.json
 if [ -f "$CONFIG_PATH" ]; then

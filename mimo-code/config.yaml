@@ -8,12 +8,16 @@ arch:
   - amd64
   - armv7
 init: false
+ingress: true
+ingress_port: 8099
 apparmor: false
 host_network: true
 homeassistant: "2024.1.0"
 hassio_api: true
 hassio_role: default
 homeassistant_api: true
+panel_icon: mdi:chat-processing
+panel_title: MiMo Code
 options:
   port: 14096
   log_level: info

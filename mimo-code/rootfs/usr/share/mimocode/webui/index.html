@@ -307,7 +307,7 @@ async function loadMessages() {
   container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   try {
     const sessionId = currentSession.id || currentSession.slug;
-    const data = await api('/session/' + sessionId + '/messages');
+    const data = await api('/session/' + sessionId + '/message');
     const msgs = data.messages || data || [];
     renderMessages(msgs);
   } catch(e) {
@@ -378,9 +378,9 @@ async function sendMessage() {
   container.scrollTop = container.scrollHeight;
 
   try {
-    const result = await api('/session/' + sessionId + '/chat', {
+    const result = await api('/session/' + sessionId + '/message', {
       method: 'POST',
-      body: { message: text }
+      body: { message: text, parts: [{ type: 'text', text: text }] }
     });
     const loader = $(loadingId);
     if (loader) loader.remove();
