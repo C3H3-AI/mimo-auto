@@ -50,6 +50,7 @@ class MiMoCoordinator:
         self._process: asyncio.subprocess.Process | None = None
         self._health_check_task: asyncio.Task | None = None
         self._restart_count: int = 0
+        self._external_mode: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
         self._server_url: str = f"http://127.0.0.1:{self._port}"
 
@@ -167,6 +168,7 @@ class MiMoCoordinator:
         """
         from types import SimpleNamespace
         self._process = SimpleNamespace(returncode=None, pid="external")
+        self._external_mode = True
         self._restart_count = 0
         self._start_health_check()
 
@@ -330,11 +332,12 @@ class MiMoCoordinator:
         Returns:
             True if the process stopped, False otherwise.
         """
+        # Stop health check first (even if process is already None, we
+        # need to cancel the health check loop for external mode tracking)
+        self._stop_health_check()
+
         if self._process is None:
             return True
-
-        # Stop health check
-        self._stop_health_check()
 
         pid = self._process.pid
         _LOGGER.info("Stopping MiMo server (PID: %d)...", pid)
@@ -487,6 +490,21 @@ class MiMoCoordinator:
     async def _handle_crash(self) -> None:
         """Handle a server crash with automatic restart logic."""
         self._restart_count += 1
+
+        # External server mode: never permanently give up — the server
+        # can be restarted independently on the host and may come back.
+        if self._external_mode:
+            if self._restart_count > MAX_RESTART_ATTEMPTS:
+                _LOGGER.warning(
+                    "MiMo server health check failed %d times. "
+                    "Resetting retry counter and will keep polling...",
+                    self._restart_count,
+                )
+                self._restart_count = 0
+            await self._stop_process()  # sets _process = None in finally
+            await self.start_server()   # reconnects to external server
+            return
+
         if self._restart_count > MAX_RESTART_ATTEMPTS:
             _LOGGER.error(
                 "MiMo server has crashed %d times. "
