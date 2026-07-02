@@ -2,6 +2,13 @@
 
 在 Home Assistant 中免费使用小米 MiMo Auto AI 模型。
 
+## 功能特点
+
+- **对话助手** — 在 HA 语音助手中使用 MiMo AI
+- **MiMo Chat 侧边栏面板** — 浏览器内直接聊天，无需 HA 语音助手配置
+- **Claw Assistant 兼容** — 注册为 conversation 实体，可被 Claw Assistant 等智能体发现
+- **自动化服务** — 通过 `mimo_auto.chat` 服务在自动化中调用 AI
+
 ## 架构
 
 ```
@@ -114,6 +121,10 @@ cp -r custom_components/mimo_auto /config/custom_components/
 
 ## 使用
 
+### MiMo Chat 侧边栏面板（v2.0 新增）
+
+添加集成后，侧边栏会自动出现 **MiMo Chat** 图标。点击即可在浏览器中直接与 MiMo 对话。
+
 ### HA 对话助手
 
 ```
@@ -172,13 +183,18 @@ HA → mimo_auto 组件 → mimo serve (本地) → MiMo 服务端
 
 ```
 custom_components/mimo_auto/
-├── __init__.py       组件入口
-├── agent_impl.py     对话代理核心逻辑
-├── coordinator.py    mimo serve 进程管理
+├── __init__.py       组件入口（含面板注册）
+├── agent_impl.py     对话代理核心逻辑（含 SSE 流式解析）
+├── coordinator.py    mimo serve 进程管理（含健康检查）
+├── conversation.py   对话实体（Claw Assistant 兼容）
 ├── config_flow.py    UI 配置流程
 ├── const.py          常量
+├── entity.py         实体注册（手动注册 fallback）
+├── mimo_proxy.py     API 代理（解决 HTTPS→HTTP 混合内容）
 ├── manifest.json     组件声明
-└── services.yaml     服务定义
+├── services.yaml     服务定义
+└── www/
+    └── index.html    MiMo Chat 侧边栏面板
 ```
 
 ## 已知限制

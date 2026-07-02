@@ -99,9 +99,11 @@ class MiMoConversationAgent:
         Returns:
             A ConversationResult containing the AI's reply.
         """
+        language = user_input.language
+
         if not self._coordinator.is_running:
             _LOGGER.warning("MiMo server is not running")
-            intent_resp = intent.IntentResponse(self._hass)
+            intent_resp = intent.IntentResponse(language)
             intent_resp.async_set_speech(ERROR_SERVER_NOT_RUNNING)
             return _conv().ConversationResult(
                 response=intent_resp,
@@ -109,7 +111,7 @@ class MiMoConversationAgent:
 
         message_text = user_input.text
         if not message_text or not message_text.strip():
-            intent_resp = intent.IntentResponse(self._hass)
+            intent_resp = intent.IntentResponse(language)
             intent_resp.async_set_speech("Please provide a message to send to MiMo Auto.")
             return _conv().ConversationResult(
                 response=intent_resp,
@@ -120,7 +122,7 @@ class MiMoConversationAgent:
                 # Step 1: Create a new session
                 session_id = await self._create_session()
                 if session_id is None:
-                    intent_resp = intent.IntentResponse(self._hass)
+                    intent_resp = intent.IntentResponse(language)
                     intent_resp.async_set_speech(ERROR_CONNECTION_FAILED)
                     return _conv().ConversationResult(
                         response=intent_resp,
@@ -129,14 +131,14 @@ class MiMoConversationAgent:
                 # Step 2: Send the message and get the response
                 reply = await self._send_message(session_id, message_text)
                 if reply is None:
-                    intent_resp = intent.IntentResponse(self._hass)
+                    intent_resp = intent.IntentResponse(language)
                     intent_resp.async_set_speech("MiMo Auto returned an empty response.")
                     return _conv().ConversationResult(
                         response=intent_resp,
                     )
 
                 # Build intent response with extra data
-                intent_response = intent.IntentResponse(self._hass)
+                intent_response = intent.IntentResponse(language)
                 intent_response.async_set_speech(reply)
 
                 # Return conversation result
@@ -147,17 +149,17 @@ class MiMoConversationAgent:
 
         except asyncio.TimeoutError:
             _LOGGER.error("MiMo conversation timed out after %d seconds", MESSAGE_TIMEOUT_SECONDS)
-            intent_resp = intent.IntentResponse(self._hass)
+            intent_resp = intent.IntentResponse(language)
             intent_resp.async_set_speech(ERROR_TIMEOUT)
             return _conv().ConversationResult(response=intent_resp)
         except (aiohttp.ClientError, OSError) as err:
             _LOGGER.error("MiMo connection error: %s", err)
-            intent_resp = intent.IntentResponse(self._hass)
+            intent_resp = intent.IntentResponse(language)
             intent_resp.async_set_speech(ERROR_CONNECTION_FAILED)
             return _conv().ConversationResult(response=intent_resp)
         except Exception as err:
             _LOGGER.exception("Unexpected error processing conversation: %s", err)
-            intent_resp = intent.IntentResponse(self._hass)
+            intent_resp = intent.IntentResponse(language)
             intent_resp.async_set_speech(f"An unexpected error occurred: {err}")
             return _conv().ConversationResult(response=intent_resp)
 

@@ -130,8 +130,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services
     await _async_register_services(hass)
 
-    # Register MiMo Chat panel
-    await _async_register_panel(hass)
+    # Register API proxy views (for web panel to reach MiMo server over HTTPS)
+    from .mimo_proxy import async_register_proxy_views
+    async_register_proxy_views(hass)
+
+    # Register conversation agent (for HA conversation UI)
+    from homeassistant.components import conversation as ha_conversation
+    ha_conversation.async_set_agent(hass, entry, agent_impl)
+
+    # Forward setup to platforms (conversation entity for claw_assistant)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register MiMo Chat web panel (best-effort, doesn't block setup)
+    try:
+        await _async_register_chat_panel(hass)
+    except Exception as err:
+        _LOGGER.warning("Could not register MiMo Chat panel: %s", err)
 
     # Register update listener for config entry changes
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -205,6 +219,39 @@ async def _async_update_listener(
     """
     _LOGGER.info("Reconfiguring MiMo Auto (entry: %s)", entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _async_register_chat_panel(hass: HomeAssistant) -> None:
+    """Register the MiMo Chat web panel in the HA sidebar."""
+    import os
+    from homeassistant.components.http import StaticPathConfig
+
+    www_dir = os.path.join(os.path.dirname(__file__), "www")
+    index_path = os.path.join(www_dir, "index.html")
+    if not os.path.exists(index_path):
+        _LOGGER.warning("MiMo Chat panel not found: %s", index_path)
+        return
+
+    try:
+        # Register static path
+        await hass.http.async_register_static_paths([
+            StaticPathConfig("/mimo-chat", index_path),
+        ])
+
+        # Register sidebar panel using built-in iframe panel type
+        from homeassistant.components.frontend import async_register_built_in_panel
+        async_register_built_in_panel(
+            hass=hass,
+            component_name="iframe",
+            frontend_url_path="mimo-chat",
+            sidebar_title="MiMo Chat",
+            sidebar_icon="mdi:chat-processing",
+            config={"url": "/mimo-chat"},
+            require_admin=True,
+        )
+        _LOGGER.info("MiMo Chat panel registered in sidebar")
+    except Exception as err:
+        _LOGGER.warning("Could not register sidebar panel: %s", err)
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:

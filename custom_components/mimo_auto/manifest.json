@@ -1,9 +1,12 @@
 {
   "domain": "mimo_auto",
   "name": "MiMo Auto",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "requirements": [],
-  "codeowners": ["@home-assistant"],
+  "codeowners": ["@C3H3-AI"],
   "config_flow": true,
+  "iot_class": "local_polling",
+  "documentation": "https://github.com/C3H3-AI/mimo-auto",
+  "issue_tracker": "https://github.com/C3H3-AI/mimo-auto/issues",
   "loggers": ["mimo_auto"]
 }
