@@ -1,28 +1,30 @@
 name: MiMo Code
-version: 1.0.0
+version: 2.1.0
 slug: mimo-code
-description: MiMo AI serve add-on for Home Assistant — powering mimo_auto integration
+description: MiMo Code AI Server — Run AI agents in your Home Assistant
 url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64
   - amd64
   - armv7
 init: false
-ingress: false
 host_network: true
-apparmor: false
-startup: application
-boot: auto
-panel_icon: mdi:chat-processing
-panel_title: MiMo Code
-homeassistant: "2024.1.0"
 ports:
   14096/tcp: 14096
 ports_description:
-  14096/tcp: MiMo AI service API port
+  14096/tcp: MiMo AI Server API port
+homeassistant: "2024.1.0"
+hassio_api: true
 options:
   port: 14096
-  print_logs: false
+  log_level: info
 schema:
   port: int(1024,65535)
-  print_logs: bool
+  log_level: list(debug|info|warning|error)
+map:
+  - config:rw
+  - share:rw
+startup: application
+boot: auto
+watchdog: "http://127.0.0.1:14096/session"
+panel_icon: mdi:chat-processing

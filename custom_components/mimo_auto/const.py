@@ -22,6 +22,7 @@ SERVER_STOP_TIMEOUT_SECONDS = 10
 # Process management
 MAX_RESTART_ATTEMPTS = 3
 PROCESS_NAME = "mimo"
+ADDON_SLUG = "mimo-code"
 
 # Conversation attributes
 ATTR_MESSAGE = "message"
