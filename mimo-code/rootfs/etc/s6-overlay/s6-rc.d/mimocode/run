@@ -4,6 +4,14 @@
 # Managed by s6-overlay, auto-restarts on crash
 # ============================================================
 
-PORT=$(bashio::config 'port')
+# Switch to /config so mimo can create its project files (.mimocode/, etc.)
+cd /config || exit 1
+
+CONFIG_PATH=/data/options.json
+if [ -f "$CONFIG_PATH" ]; then
+    PORT=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('port', 14096))")
+else
+    PORT=14096
+fi
 
 exec /usr/local/bin/mimo serve --port "${PORT}"

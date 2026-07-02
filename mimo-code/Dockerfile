@@ -37,7 +37,8 @@ RUN BIN=$(find /usr/local/lib/mimo -path '*/bin/mimo' -type f 2>/dev/null | head
 
 # bashio is already included in the HA base image
 # Install Python3 for the Web UI server
-RUN apk add --no-cache python3
+RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://mirrors.aliyun.com|g' /etc/apk/repositories && \
+    apk add --no-cache python3
 
 # Copy s6-overlay service files and Web UI
 COPY rootfs/ /
@@ -58,10 +59,10 @@ LABEL \
     io.hass.arch="${BUILD_ARCH}" \
     io.hass.type="addon" \
     io.hass.version=${BUILD_VERSION} \
-    maintainer="MiMo Auto Team <https://github.com/C3H3-AI/mimo-auto>" \
+    maintainer="C3H3-AI <https://github.com/C3H3-AI/mimo-auto>" \
     org.opencontainers.image.title="${BUILD_NAME}" \
     org.opencontainers.image.description="${BUILD_DESCRIPTION}" \
-    org.opencontainers.image.vendor="MiMo Auto Team" \
+    org.opencontainers.image.vendor="C3H3-AI" \
     org.opencontainers.image.authors="https://github.com/C3H3-AI/mimo-auto" \
     org.opencontainers.image.licenses="MIT" \
     org.opencontainers.image.url="https://github.com/C3H3-AI/mimo-auto" \

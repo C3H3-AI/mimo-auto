@@ -1,4 +1,10 @@
 #!/usr/bin/with-contenv bashio
 
-MIMO_PORT=$(bashio::config 'port')
+CONFIG_PATH=/data/options.json
+if [ -f "$CONFIG_PATH" ]; then
+    MIMO_PORT=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('port', 14096))")
+else
+    MIMO_PORT=14096
+fi
+
 exec env MIMO_PORT="${MIMO_PORT}" /usr/bin/python3 /usr/share/mimocode/webui/server.py

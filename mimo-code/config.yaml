@@ -10,16 +10,10 @@ arch:
 init: false
 apparmor: false
 host_network: true
-ports:
-  8099/tcp: 8099
-ports_description:
-  8099/tcp: MiMo Code Web UI
 homeassistant: "2024.1.0"
 hassio_api: true
+hassio_role: default
 homeassistant_api: true
-ingress: true
-ingress_port: 8099
-ingress_entry: /
 options:
   port: 14096
   log_level: info
@@ -32,4 +26,3 @@ map:
 startup: application
 boot: auto
 watchdog: "http://127.0.0.1:14096/session"
-panel_icon: mdi:chat-processing
