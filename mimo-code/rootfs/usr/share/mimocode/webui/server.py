@@ -109,6 +109,24 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                         pass
                 else:
                     # Normal JSON response
+                    # Trim provider data to avoid 4MB response
+                    if target_path == "/provider":
+                        try:
+                            raw = json.loads(data)
+                            if isinstance(raw, dict) and "all" in raw:
+                                all_providers = raw["all"]
+                                connected = raw.get("connected", [])
+                                # Keep only connected + Xiaomi + MiMo providers
+                                keep_names = set()
+                                if isinstance(connected, list):
+                                    keep_names.update(connected)
+                                # Also keep known useful IDs
+                                keep_names.update(["xiaomi", "mimo"])
+                                filtered = [p for p in all_providers if p.get("id") in keep_names]
+                                raw["all"] = filtered
+                                data = json.dumps(raw, ensure_ascii=False).encode()
+                        except (json.JSONDecodeError, Exception):
+                            pass
                     self.send_response(resp.status)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(data)))
