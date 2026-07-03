@@ -3,238 +3,335 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
 <title>MiMo Code</title>
 <style>
-  :root {
-    --bg: #1c1c1e;
-    --surface: #2c2c2e;
-    --surface2: #3a3a3c;
-    --border: #48484a;
-    --text: #f5f5f7;
-    --text2: #a1a1a6;
-    --accent: #0a84ff;
-    --accent2: #5e5ce6;
-    --green: #30d158;
-    --red: #ff453a;
-    --orange: #ff9f0a;
-    --radius: 10px;
-    --shadow: 0 2px 8px rgba(0,0,0,0.3);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
-  }
-  .app { display: flex; height: 100vh; }
-  .sidebar {
-    width: 280px; background: var(--surface); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; flex-shrink: 0;
-  }
-  .sidebar-header {
-    padding: 16px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
-  }
-  .sidebar-header h1 { font-size: 16px; font-weight: 600; }
-  .sidebar-header .badge {
-    font-size: 11px; background: var(--accent); color: #fff;
-    padding: 2px 8px; border-radius: 10px;
-  }
-  .session-list { flex: 1; overflow-y: auto; padding: 8px; }
-  .session-item {
-    padding: 10px 12px; border-radius: 8px; cursor: pointer;
-    margin-bottom: 4px; transition: background 0.15s;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .session-item:hover { background: var(--surface2); }
-  .session-item.active { background: var(--accent); color: #fff; }
-  .session-item .dot {
-    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-    background: var(--text2);
-  }
-  .session-item.active .dot { background: #fff; }
-  .session-item .info { flex: 1; min-width: 0; }
-  .session-item .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .session-item .meta { font-size: 11px; color: var(--text2); margin-top: 2px; }
-  .session-item.active .meta { color: rgba(255,255,255,0.7); }
-  .new-session-btn {
-    margin: 8px; padding: 10px; border-radius: 8px; border: 1px dashed var(--border);
-    background: transparent; color: var(--text2); cursor: pointer; font-size: 13px;
-    transition: all 0.15s;
-  }
-  .new-session-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(10,132,255,0.08); }
+:root {
+  --bg: #1c1c1e;
+  --surface: #2c2c2e;
+  --surface2: #3a3a3c;
+  --border: #48484a;
+  --text: #f5f5f7;
+  --text2: #a1a1a6;
+  --accent: #0a84ff;
+  --accent2: #5e5ce6;
+  --green: #30d158;
+  --red: #ff453a;
+  --orange: #ff9f0a;
+  --radius: 10px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  --sidebar-w: 280px;
+}
+[data-theme="light"] {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface2: #e8e8ed;
+  --border: #d1d1d6;
+  --text: #1c1c1e;
+  --text2: #6c6c70;
+  --shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --surface: #44475a;
+  --surface2: #6272a4;
+  --border: #44475a;
+  --text: #f8f8f2;
+  --text2: #bd93f9;
+  --accent: #50fa7b;
+  --accent2: #ff79c6;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --orange: #ffb86c;
+}
+[data-theme="solarized"] {
+  --bg: #002b36;
+  --surface: #073642;
+  --surface2: #586e75;
+  --border: #586e75;
+  --text: #93a1a1;
+  --text2: #657b83;
+  --accent: #268bd2;
+  --accent2: #6c71c4;
+  --green: #859900;
+  --red: #dc322f;
+  --orange: #cb4b16;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+}
+.app { display: flex; height: 100vh; }
+.sidebar {
+  width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+.sidebar-header {
+  padding: 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px; justify-content: space-between;
+}
+.sidebar-header .left { display: flex; align-items: center; gap: 10px; }
+.sidebar-header h1 { font-size: 16px; font-weight: 600; }
+.badge { font-size: 11px; background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 10px; }
+.search-box {
+  margin: 8px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px; outline: none; width: calc(100% - 16px);
+}
+.search-box:focus { border-color: var(--accent); }
+.session-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.session-item {
+  padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+  transition: background 0.15s;
+}
+.session-item:hover { background: var(--surface2); }
+.session-item.active { background: var(--accent); color: #fff; }
+.session-item .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-item .meta { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.session-item.active .meta { color: rgba(255,255,255,0.7); }
+.new-session-btn {
+  margin: 8px; padding: 10px; border-radius: 8px; border: 1px dashed var(--border);
+  background: transparent; color: var(--text2); cursor: pointer; font-size: 13px; transition: all 0.15s;
+}
+.new-session-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(10,132,255,0.08); }
 
-  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .chat-header {
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .chat-header .info h2 { font-size: 16px; font-weight: 600; }
-  .chat-header .info .sub { font-size: 12px; color: var(--text2); }
-  .header-actions { display: flex; gap: 8px; }
-  .btn {
-    padding: 6px 14px; border-radius: 6px; border: none;
-    font-size: 12px; cursor: pointer; transition: all 0.15s;
-  }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { opacity: 0.85; }
-  .btn-danger { background: var(--red); color: #fff; }
-  .btn-danger:hover { opacity: 0.85; }
-  .btn-ghost { background: var(--surface2); color: var(--text); }
-  .btn-ghost:hover { background: var(--border); }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-header {
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.chat-header .info { flex: 1; min-width: 0; }
+.chat-header h2 { font-size: 15px; font-weight: 600; }
+.chat-header .sub { font-size: 12px; color: var(--text2); }
+.toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.toolbar select {
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer; outline: none;
+}
+.toolbar select:focus { border-color: var(--accent); }
+.toolbar button {
+  padding: 4px 10px; border-radius: 6px; border: none; font-size: 12px; cursor: pointer;
+  background: var(--surface2); color: var(--text); transition: 0.15s;
+}
+.toolbar button:hover { background: var(--border); }
+.toolbar button.active { background: var(--accent); color: #fff; }
 
-  .messages { flex: 1; overflow-y: auto; padding: 20px; }
-  .message { margin-bottom: 16px; display: flex; gap: 12px; }
-  .message.assistant { flex-direction: row; }
-  .message.user { flex-direction: row-reverse; }
-  .message .avatar {
-    width: 32px; height: 32px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px; flex-shrink: 0;
-  }
-  .message.user .avatar { background: var(--accent); }
-  .message.assistant .avatar { background: var(--accent2); }
-  .message .bubble {
-    max-width: 75%; padding: 10px 14px; border-radius: 14px;
-    font-size: 14px; line-height: 1.5;
-  }
-  .message.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
-  .message.assistant .bubble { background: var(--surface2); border-bottom-left-radius: 4px; }
-  .message .bubble pre {
-    background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;
-    overflow-x: auto; font-size: 13px; margin: 8px 0;
-  }
-  .message .bubble code { font-size: 13px; }
-  .message .time { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.messages { flex: 1; overflow-y: auto; padding: 20px; }
+.message { margin-bottom: 16px; display: flex; gap: 12px; }
+.message.assistant { flex-direction: row; }
+.message.user { flex-direction: row-reverse; }
+.message .avatar {
+  width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 14px; flex-shrink: 0;
+}
+.message.user .avatar { background: var(--accent); }
+.message.assistant .avatar { background: var(--accent2); }
+.message .bubble {
+  max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5;
+}
+.message.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.message.assistant .bubble { background: var(--surface2); border-bottom-left-radius: 4px; }
+.message .bubble pre {
+  background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; margin: 8px 0;
+}
+.message .bubble code { font-size: 13px; }
+.message .time { font-size: 11px; color: var(--text2); margin-top: 4px; }
 
-  .input-area {
-    padding: 16px 20px; border-top: 1px solid var(--border);
-    display: flex; gap: 10px; align-items: flex-end;
-  }
-  .input-area textarea {
-    flex: 1; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 10px 14px; color: var(--text);
-    font-size: 14px; font-family: inherit; resize: none;
-    min-height: 42px; max-height: 120px; outline: none;
-  }
-  .input-area textarea:focus { border-color: var(--accent); }
-  .input-area .send-btn {
-    width: 42px; height: 42px; border-radius: 50%; border: none;
-    background: var(--accent); color: #fff; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; flex-shrink: 0; transition: 0.15s;
-  }
-  .input-area .send-btn:hover { opacity: 0.85; }
-  .input-area .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.input-area {
+  padding: 12px 20px 16px; border-top: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: flex-end;
+}
+.input-area textarea {
+  flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; color: var(--text); font-size: 14px; font-family: inherit; resize: none;
+  min-height: 42px; max-height: 120px; outline: none;
+}
+.input-area textarea:focus { border-color: var(--accent); }
+.input-area .send-btn {
+  width: 42px; height: 42px; border-radius: 50%; border: none; background: var(--accent);
+  color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0; transition: 0.15s;
+}
+.input-area .send-btn:hover { opacity: 0.85; }
+.input-area .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.input-area .hint { font-size: 11px; color: var(--text2); padding: 0 4px 4px; }
 
-  .empty-state {
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; color: var(--text2); gap: 12px;
-  }
-  .empty-state .icon { font-size: 48px; opacity: 0.3; }
-  .empty-state h3 { font-size: 18px; color: var(--text); }
-  .empty-state p { font-size: 14px; text-align: center; max-width: 320px; }
+/* Command Palette Overlay */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 1000; display: none;
+  align-items: flex-start; justify-content: center; padding-top: 80px;
+}
+.overlay.open { display: flex; }
+.palette {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  width: 560px; max-height: 400px; box-shadow: var(--shadow); display: flex; flex-direction: column;
+}
+.palette input {
+  padding: 14px 16px; border: none; border-bottom: 1px solid var(--border);
+  background: transparent; color: var(--text); font-size: 15px; outline: none; width: 100%;
+}
+.palette .results { overflow-y: auto; flex: 1; }
+.palette .item {
+  padding: 10px 16px; cursor: pointer; transition: 0.1s; display: flex; align-items: center; gap: 10px;
+}
+.palette .item:hover, .palette .item.selected { background: var(--surface2); }
+.palette .item .name { font-size: 14px; }
+.palette .item .desc { font-size: 12px; color: var(--text2); }
+.palette .item .key { margin-left: auto; font-size: 11px; color: var(--text2); padding: 2px 6px; background: var(--bg); border-radius: 4px; }
 
-  .loading { display: flex; align-items: center; justify-content: center; padding: 40px; }
-  .spinner {
-    width: 24px; height: 24px; border: 3px solid var(--border);
-    border-top-color: var(--accent); border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+/* Settings Drawer */
+.drawer {
+  position: fixed; top: 0; right: -480px; width: 480px; bottom: 0;
+  background: var(--surface); border-left: 1px solid var(--border);
+  z-index: 999; transition: right 0.3s; display: flex; flex-direction: column;
+}
+.drawer.open { right: 0; }
+.drawer-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.drawer-header h2 { font-size: 16px; }
+.drawer-header .close-btn { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; }
+.drawer-tabs {
+  display: flex; border-bottom: 1px solid var(--border); padding: 0 16px; gap: 0;
+}
+.drawer-tabs button {
+  padding: 10px 16px; border: none; background: none; color: var(--text2); font-size: 13px;
+  cursor: pointer; border-bottom: 2px solid transparent; transition: 0.15s;
+}
+.drawer-tabs button:hover { color: var(--text); }
+.drawer-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.drawer-body { flex: 1; overflow-y: auto; padding: 20px; }
+.setting-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-row .label { font-size: 14px; }
+.setting-row .desc { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.setting-row select, .setting-row input {
+  padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); font-size: 13px; outline: none;
+}
+.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card {
+  background: var(--surface2); border-radius: 8px; padding: 14px; border: 1px solid var(--border);
+}
+.card .name { font-size: 14px; font-weight: 500; }
+.card .status { font-size: 12px; margin-top: 4px; }
+.status-ok { color: var(--green); }
+.status-err { color: var(--red); }
+.card .actions { margin-top: 8px; display: flex; gap: 6px; }
+.card .actions button {
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--text); font-size: 12px; cursor: pointer;
+}
+.card .actions button:hover { background: var(--border); }
 
-  .toast {
-    position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
-    border-radius: 8px; color: #fff; font-size: 13px; z-index: 1000;
-    animation: slideIn 0.3s ease;
-  }
-  .toast.success { background: var(--green); }
-  .toast.error { background: var(--red); }
-  @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-
-  .welcome-message {
-    margin-bottom: 20px; padding: 16px; background: var(--surface);
-    border-radius: var(--radius); font-size: 14px; line-height: 1.6; color: var(--text2);
-    text-align: center;
-  }
-
-  .settings-panel {
-    padding: 24px; overflow-y: auto; flex: 1;
-  }
-  .settings-panel h2 { font-size: 18px; margin-bottom: 16px; }
-  .setting-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 12px 16px; background: var(--surface); border-radius: 8px;
-    margin-bottom: 8px;
-  }
-  .setting-row .label { font-size: 14px; }
-  .setting-row .value { font-size: 13px; color: var(--text2); }
-
-  @media (max-width: 768px) {
-    .sidebar { width: 60px; }
-    .sidebar .session-item .info { display: none; }
-    .sidebar-header h1 { display: none; }
-    .message .bubble { max-width: 85%; }
-  }
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { width: 60px; }
+  .sidebar .session-item .info { display: none; }
+  .sidebar-header h1 { display: none; }
+  .message .bubble { max-width: 85%; }
+  .drawer { width: 100%; right: -100%; }
+  .palette { width: 90%; }
+}
 </style>
 </head>
 <body>
 <div class="app">
+  <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <span style="font-size:20px">&#x1F916;</span>
-      <h1>MiMo</h1>
-      <span class="badge">v2.1</span>
+      <div class="left">
+        <span style="font-size:20px">&#x1F916;</span>
+        <h1>MiMo</h1>
+        <span class="badge" id="versionBadge">v2.1</span>
+      </div>
+      <button class="new-session-btn" onclick="createSession()" title="New Session">+</button>
     </div>
-    <button class="new-session-btn" onclick="createSession()">+ New Session</button>
+    <input class="search-box" id="searchInput" placeholder="Search sessions..." oninput="filterSessions()">
     <div class="session-list" id="sessionList"></div>
   </aside>
 
+  <!-- Main -->
   <main class="main">
     <div class="chat-header">
       <div class="info">
         <h2 id="currentTitle">MiMo Code</h2>
-        <div class="sub" id="currentSub">Select a session to start chatting</div>
+        <div class="sub" id="currentSub">Select a session or create a new one</div>
       </div>
-      <div class="header-actions">
-        <button class="btn btn-ghost" onclick="refreshSessions()">Refresh</button>
-        <button class="btn btn-danger" id="deleteBtn" onclick="deleteSession()" style="display:none">Delete</button>
+      <div class="toolbar">
+        <select id="modelSelect" onchange="switchModel(this.value)" title="Model"><option value="">Loading...</option></select>
+        <select id="agentSelect" onchange="switchAgent(this.value)" title="Agent Mode"><option value="">Loading...</option></select>
+        <button onclick="openSettings()" title="Settings">&#x2699;</button>
       </div>
     </div>
 
     <div id="messages" class="messages">
-      <div class="empty-state">
-        <div class="icon">&#x1F916;</div>
-        <h3>Welcome to MiMo Code</h3>
-        <p>Select a session from the sidebar or create a new one to start interacting with your AI assistant.</p>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text2);flex-direction:column;gap:12px">
+        <div style="font-size:48px;opacity:0.3">&#x1F916;</div>
+        <h3 style="font-size:18px;color:var(--text)">Welcome to MiMo Code</h3>
+        <p style="font-size:14px;text-align:center;max-width:320px">Press <kbd>Ctrl+K</kbd> to open commands, or start typing below.</p>
       </div>
     </div>
 
-    <div class="input-area" id="inputArea" style="display:none">
-      <textarea id="chatInput" rows="1" placeholder="Type a message..." onkeydown="handleKeyDown(event)"></textarea>
+    <div class="input-area">
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+        <textarea id="chatInput" rows="1" placeholder="Type a message... (Ctrl+K for commands)" onkeydown="handleKeyDown(event)"></textarea>
+        <div class="hint" id="modeHint">Agent mode</div>
+      </div>
       <button class="send-btn" id="sendBtn" onclick="sendMessage()">&#x2191;</button>
     </div>
   </main>
 </div>
 
+<!-- Command Palette Overlay -->
+<div class="overlay" id="paletteOverlay" onclick="if(event.target===this)closePalette()">
+  <div class="palette">
+    <input id="paletteInput" placeholder="Type a command..." oninput="filterPalette()" onkeydown="paletteKeydown(event)" autofocus>
+    <div class="results" id="paletteResults"></div>
+  </div>
+</div>
+
+<!-- Settings Drawer -->
+<div class="drawer" id="settingsDrawer">
+  <div class="drawer-header">
+    <h2>Settings</h2>
+    <button class="close-btn" onclick="closeSettings()">&times;</button>
+  </div>
+  <div class="drawer-tabs" id="settingsTabs">
+    <button class="active" onclick="switchSettingsTab('general',this)">General</button>
+    <button onclick="switchSettingsTab('providers',this)">Providers</button>
+    <button onclick="switchSettingsTab('skills',this)">Skills</button>
+    <button onclick="switchSettingsTab('stats',this)">Stats</button>
+  </div>
+  <div class="drawer-body" id="settingsBody"></div>
+</div>
+
 <script>
+// ====== State ======
+const API = '/api';
 let sessions = [];
 let currentSession = null;
 let loading = false;
+let commands = [];
+let agents = [];
+let providers = [];
+let skills = [];
+let allSettings = {};
+const THEMES = ['default', 'light', 'dracula', 'solarized'];
 
-const API = '/api';
-
-function $(id) { return document.getElementById(id); }
-
-function toast(msg, type) {
+// ====== Helpers ======
+const $ = id => document.getElementById(id);
+const toast = (msg, type) => {
   const el = document.createElement('div');
-  el.className = 'toast ' + type;
+  el.style.cssText = `position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;color:#fff;font-size:13px;z-index:2000;background:${type==='error'?'var(--red)':'var(--green)'}`;
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3000);
-}
+};
 
 async function api(path, opts = {}) {
   const url = API + path;
@@ -254,36 +351,49 @@ async function api(path, opts = {}) {
   try { return JSON.parse(text); } catch(e) { return text; }
 }
 
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function formatContent(text) {
+  if (!text) return '';
+  const escaped = escapeHtml(text);
+  const withCode = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  const withInline = withCode.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return withInline.replace(/\n/g, '<br>');
+}
+
+// ====== Sessions ======
 async function loadSessions() {
   try {
     const data = await api('/session');
-    sessions = data.sessions || data || [];
+    sessions = Array.isArray(data) ? data : [];
     renderSessions();
-  } catch(e) {
-    console.error('Failed to load sessions:', e);
-  }
+  } catch(e) { console.error('loadSessions:', e); }
 }
 
 function renderSessions() {
   const list = $('sessionList');
-  if (!sessions.length) {
-    list.innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;font-size:13px">No sessions yet</div>';
+  const q = $('searchInput').value.toLowerCase();
+  const filtered = sessions.filter(s => (s.title||s.slug||'').toLowerCase().includes(q));
+  if (!filtered.length) {
+    list.innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;font-size:13px">No sessions</div>';
     return;
   }
-  list.innerHTML = sessions.map(s => {
+  list.innerHTML = filtered.map(s => {
     const id = s.id || s.slug;
     const title = s.title || s.slug || 'Untitled';
     const active = currentSession && (currentSession.id === id || currentSession.slug === id) ? 'active' : '';
     const time = s.time ? new Date(s.time.created || s.time).toLocaleString() : '';
-    return `<div class="session-item ${active}" data-id="${id}" onclick="selectSession('${id}')">
-      <div class="dot"></div>
-      <div class="info">
-        <div class="title">${title}</div>
-        <div class="meta">${time}</div>
-      </div>
+    return `<div class="session-item ${active}" onclick="selectSession('${id}')">
+      <div class="title">${escapeHtml(title)}</div>
+      <div class="meta">${time}</div>
     </div>`;
   }).join('');
 }
+
+function filterSessions() { renderSessions(); }
 
 async function selectSession(id) {
   try {
@@ -295,117 +405,10 @@ async function selectSession(id) {
     const title = currentSession.title || currentSession.slug || 'Session';
     $('currentTitle').textContent = title;
     $('currentSub').textContent = 'Session active';
-    $('deleteBtn').style.display = '';
-    $('inputArea').style.display = '';
     renderSessions();
     loadMessages();
     $('chatInput').focus();
-  } catch(e) {
-    toast('Failed to load session: ' + e.message, 'error');
-  }
-}
-
-async function loadMessages() {
-  const container = $('messages');
-  container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  try {
-    const sessionId = currentSession.id || currentSession.slug;
-    const data = await api('/session/' + sessionId + '/message');
-    const msgs = data.messages || data || [];
-    renderMessages(msgs);
-  } catch(e) {
-    container.innerHTML = '<div class="empty-state"><p style="color:var(--text2)">No messages yet. Start a conversation!</p></div>';
-  }
-}
-
-function renderMessages(msgs) {
-  const container = $('messages');
-  if (!msgs || !msgs.length) {
-    container.innerHTML = `<div class="welcome-message">
-      <p>Start a conversation with MiMo Code. Ask questions, control your home, or explore AI capabilities.</p>
-    </div>`;
-    return;
-  }
-  container.innerHTML = msgs.map(m => {
-    const role = m.role || m.author || 'assistant';
-    const content = m.content || m.text || '';
-    const time = m.time ? new Date(m.time).toLocaleTimeString() : '';
-    const formatted = formatContent(content);
-    return `<div class="message ${role}">
-      <div class="avatar">${role === 'user' ? '&#x1F464;' : '&#x1F916;'}</div>
-      <div class="bubble">${formatted}<div class="time">${time}</div></div>
-    </div>`;
-  }).join('');
-  container.scrollTop = container.scrollHeight;
-}
-
-function formatContent(text) {
-  if (!text) return '';
-  const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const withCode = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-  const withInline = withCode.replace(/`([^`]+)`/g, '<code>$1</code>');
-  const withNewlines = withInline.replace(/\n/g, '<br>');
-  return withNewlines;
-}
-
-async function sendMessage() {
-  const input = $('chatInput');
-  const text = input.value.trim();
-  if (!text || loading) return;
-
-  if (!currentSession) {
-    toast('Please select a session first', 'error');
-    return;
-  }
-
-  const sessionId = currentSession.id || currentSession.slug;
-  input.value = '';
-  loading = true;
-  $('sendBtn').disabled = true;
-
-  const container = $('messages');
-  const empty = container.querySelector('.empty-state, .welcome-message');
-  if (empty) container.innerHTML = '';
-
-  container.insertAdjacentHTML('beforeend', `<div class="message user">
-    <div class="avatar">&#x1F464;</div>
-    <div class="bubble">${formatContent(text)}</div>
-  </div>`);
-  container.scrollTop = container.scrollHeight;
-
-  const loadingId = 'loading-' + Date.now();
-  container.insertAdjacentHTML('beforeend', `<div class="message assistant" id="${loadingId}">
-    <div class="avatar">&#x1F916;</div>
-    <div class="bubble"><div class="spinner" style="width:16px;height:16px;margin:4px 0"></div></div>
-  </div>`);
-  container.scrollTop = container.scrollHeight;
-
-  try {
-    const result = await api('/session/' + sessionId + '/message', {
-      method: 'POST',
-      body: { message: text, parts: [{ type: 'text', text: text }] }
-    });
-    const loader = $(loadingId);
-    if (loader) loader.remove();
-    const reply = result.response || result.message || result.text || JSON.stringify(result);
-    container.insertAdjacentHTML('beforeend', `<div class="message assistant">
-      <div class="avatar">&#x1F916;</div>
-      <div class="bubble">${formatContent(reply)}</div>
-    </div>`);
-    container.scrollTop = container.scrollHeight;
-    loadSessions();
-  } catch(e) {
-    const loader = $(loadingId);
-    if (loader) loader.remove();
-    container.insertAdjacentHTML('beforeend', `<div class="message assistant">
-      <div class="avatar">&#x1F916;</div>
-      <div class="bubble" style="color:var(--red)">Error: ${e.message}</div>
-    </div>`);
-  }
-
-  loading = false;
-  $('sendBtn').disabled = false;
-  input.focus();
+  } catch(e) { toast('Failed to load session: ' + e.message, 'error'); }
 }
 
 async function createSession() {
@@ -415,28 +418,106 @@ async function createSession() {
     await loadSessions();
     const id = data.id || data.slug;
     if (id) selectSession(id);
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function loadMessages() {
+  const container = $('messages');
+  if (!currentSession) return;
+  try {
+    const sessionId = currentSession.id || currentSession.slug;
+    const data = await api('/session/' + sessionId + '/message');
+    const msgs = Array.isArray(data) ? data : (data.messages || []);
+    renderMessages(msgs);
   } catch(e) {
-    toast('Failed to create session: ' + e.message, 'error');
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2)">No messages yet</div>';
   }
 }
 
-async function deleteSession() {
-  if (!currentSession) return;
-  if (!confirm('Delete this session?')) return;
-  try {
-    const id = currentSession.id || currentSession.slug;
-    await api('/session/' + id, { method: 'DELETE' });
-    currentSession = null;
-    $('currentTitle').textContent = 'MiMo Code';
-    $('currentSub').textContent = 'Select a session to start chatting';
-    $('deleteBtn').style.display = 'none';
-    $('inputArea').style.display = 'none';
-    $('messages').innerHTML = '<div class="empty-state"><div class="icon">&#x1F916;</div><h3>Welcome to MiMo Code</h3><p>Select a session from the sidebar or create a new one.</p></div>';
-    toast('Session deleted', 'success');
-    await loadSessions();
-  } catch(e) {
-    toast('Failed to delete: ' + e.message, 'error');
+function renderMessages(msgs) {
+  const container = $('messages');
+  if (!msgs || !msgs.length) {
+    container.innerHTML = `<div style="margin-bottom:20px;padding:16px;background:var(--surface);border-radius:var(--radius);font-size:14px;line-height:1.6;color:var(--text2);text-align:center">
+      Start a conversation. Ask questions or give commands.</div>`;
+    return;
   }
+  container.innerHTML = msgs.map(m => {
+    const role = m.role || m.author || 'assistant';
+    const parts = m.parts || [{ type: 'text', text: m.content || m.text || '' }];
+    const content = parts.filter(p => p.type === 'text').map(p => p.text).join('\n');
+    const time = m.time ? new Date(m.time).toLocaleTimeString() : '';
+    return `<div class="message ${role}">
+      <div class="avatar">${role === 'user' ? '&#x1F464;' : '&#x1F916;'}</div>
+      <div class="bubble">${formatContent(content)}<div class="time">${time}</div></div>
+    </div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+// ====== Send Message (Streaming) ======
+async function sendMessage() {
+  const input = $('chatInput');
+  const text = input.value.trim();
+  if (!text || loading) return;
+
+  if (!currentSession) {
+    toast('Please create a session first', 'error');
+    return;
+  }
+
+  const sessionId = currentSession.id || currentSession.slug;
+  input.value = '';
+  loading = true;
+  $('sendBtn').disabled = true;
+
+  const container = $('messages');
+  const welcome = container.querySelector('[style*="align-items:center;justify-content:center"]');
+  if (welcome) container.innerHTML = '';
+
+  // Add user message
+  container.insertAdjacentHTML('beforeend',
+    `<div class="message user"><div class="avatar">&#x1F464;</div><div class="bubble">${formatContent(text)}</div></div>`);
+  container.scrollTop = container.scrollHeight;
+
+  // Add loading indicator
+  const loadId = 'load-' + Date.now();
+  container.insertAdjacentHTML('beforeend',
+    `<div class="message assistant" id="${loadId}"><div class="avatar">&#x1F916;</div><div class="bubble"><div class="spinner" style="width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:4px 0"></div></div></div>`);
+  container.scrollTop = container.scrollHeight;
+
+  try {
+    const result = await api('/session/' + sessionId + '/message', {
+      method: 'POST',
+      body: { message: text, parts: [{ type: 'text', text: text }] },
+    });
+
+    const loader = $(loadId);
+    if (loader) loader.remove();
+
+    // Extract response text from various response formats
+    let reply = '';
+    if (typeof result === 'string') reply = result;
+    else if (result.content) reply = result.content;
+    else if (result.response) reply = result.response;
+    else if (result.message) reply = result.message;
+    else if (result.text) reply = result.text;
+    else if (result.parts) reply = result.parts.filter(p => p.type === 'text').map(p => p.text).join('\n');
+    else reply = JSON.stringify(result);
+
+    container.insertAdjacentHTML('beforeend',
+      `<div class="message assistant"><div class="avatar">&#x1F916;</div><div class="bubble">${formatContent(reply)}</div></div>`);
+    container.scrollTop = container.scrollHeight;
+    loadSessions();
+  } catch(e) {
+    const loader = $(loadId);
+    if (loader) loader.remove();
+    container.insertAdjacentHTML('beforeend',
+      `<div class="message assistant"><div class="avatar">&#x1F916;</div><div class="bubble" style="color:var(--red)">Error: ${escapeHtml(e.message)}</div></div>`);
+  }
+
+  loading = false;
+  $('sendBtn').disabled = false;
+  input.focus();
 }
 
 function handleKeyDown(e) {
@@ -444,15 +525,250 @@ function handleKeyDown(e) {
     e.preventDefault();
     sendMessage();
   }
+  if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    openPalette();
+  }
 }
 
-async function refreshSessions() {
-  await loadSessions();
-  toast('Refreshed', 'success');
+// ====== Command Palette ======
+async function loadCommands() {
+  try {
+    const data = await api('/command');
+    commands = Array.isArray(data) ? data : [];
+  } catch(e) { commands = []; }
 }
 
-loadSessions();
-setInterval(loadSessions, 30000);
+function openPalette() {
+  $('paletteOverlay').classList.add('open');
+  $('paletteInput').value = '';
+  $('paletteInput').focus();
+  filterPalette();
+}
+
+function closePalette() {
+  $('paletteOverlay').classList.remove('open');
+}
+
+function filterPalette() {
+  const q = $('paletteInput').value.toLowerCase();
+  const results = $('paletteResults');
+  const items = commands.filter(c => (c.name||c.command||'').toLowerCase().includes(q));
+  results.innerHTML = items.slice(0, 20).map((c, i) =>
+    `<div class="item${i===0?' selected':''}" onclick="executeCommand('${c.command||c.name}')">
+      <div><div class="name">${escapeHtml(c.name||c.command||c)}</div><div class="desc">${escapeHtml(c.description||'')}</div></div>
+      <div class="key">/${c.command||c.name}</div>
+    </div>`
+  ).join('');
+}
+
+function paletteKeydown(e) {
+  if (e.key === 'Escape') closePalette();
+  if (e.key === 'Enter') {
+    const sel = $('paletteResults').querySelector('.selected');
+    if (sel) sel.click();
+    closePalette();
+  }
+}
+
+function executeCommand(cmd) {
+  const input = $('chatInput');
+  if (cmd.startsWith('/')) {
+    input.value = cmd + ' ';
+  } else {
+    input.value = '/' + cmd + ' ';
+  }
+  input.focus();
+  closePalette();
+}
+
+// ====== Models (Providers) ======
+async function loadModels() {
+  try {
+    const data = await api('/provider');
+    providers = Array.isArray(data) ? data : (data.providers || []);
+    const sel = $('modelSelect');
+    sel.innerHTML = '<option value="">Select model...</option>';
+    providers.forEach(p => {
+      const models = p.models || [p.model || p.name].filter(Boolean);
+      models.forEach(m => {
+        sel.innerHTML += `<option value="${m}">${escapeHtml(p.name||'')} / ${escapeHtml(m)}</option>`;
+      });
+    });
+    // Try to get current model from config
+    try {
+      const config = await api('/config');
+      if (config && config.model) {
+        sel.value = config.model;
+      }
+    } catch(e) {}
+  } catch(e) { console.error('loadModels:', e); }
+}
+
+async function switchModel(model) {
+  if (!model) return;
+  try {
+    await api('/config', { method: 'POST', body: { model } });
+    toast('Model switched to ' + model, 'success');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+// ====== Agents ======
+async function loadAgents() {
+  try {
+    const data = await api('/agent');
+    agents = Array.isArray(data) ? data : [];
+    const sel = $('agentSelect');
+    sel.innerHTML = '<option value="">Agent mode...</option>';
+    agents.forEach(a => {
+      sel.innerHTML += `<option value="${a.name||a.slug}">${escapeHtml(a.name||a.slug)}</option>`;
+    });
+    // Set mode hint
+    if (agents.length) {
+      $('modeHint').textContent = `${agents[0].name||'Agent'} mode`;
+    }
+  } catch(e) { console.error('loadAgents:', e); }
+}
+
+async function switchAgent(agent) {
+  if (!agent) return;
+  $('modeHint').textContent = `${agent} mode`;
+  try {
+    await api('/config', { method: 'POST', body: { agent } });
+    toast('Switched to ' + agent, 'success');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+// ====== Skills ======
+async function loadSkills() {
+  try {
+    const data = await api('/skill');
+    skills = Array.isArray(data) ? data : (data.skills || []);
+  } catch(e) { skills = []; }
+}
+
+// ====== Settings Drawer ======
+function openSettings() {
+  $('settingsDrawer').classList.add('open');
+  loadSettingsTab('general');
+}
+
+function closeSettings() {
+  $('settingsDrawer').classList.remove('open');
+}
+
+function switchSettingsTab(tab, btn) {
+  document.querySelectorAll('#settingsTabs button').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadSettingsTab(tab);
+}
+
+async function loadSettingsTab(tab) {
+  const body = $('settingsBody');
+  try { allSettings = await api('/config') || {}; } catch(e) {}
+
+  switch(tab) {
+    case 'general':
+      body.innerHTML = `
+        <div class="setting-row">
+          <div><div class="label">Theme</div><div class="desc">UI color theme</div></div>
+          <select onchange="setTheme(this.value)">
+            ${THEMES.map(t => `<option value="${t}" ${(allSettings.theme||'default')===t?'selected':''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="label">Model</div><div class="desc">AI model</div></div>
+          <select onchange="switchModel(this.value)">
+            ${providers.flatMap(p => (p.models||[p.model||p.name]).filter(Boolean)).map(m =>
+              `<option value="${m}" ${allSettings.model===m?'selected':''}>${escapeHtml(m)}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="label">Agent Mode</div><div class="desc">Interaction mode</div></div>
+          <select onchange="switchAgent(this.value)">
+            ${agents.map(a => `<option value="${a.name||a.slug}" ${(allSettings.agent||'')===(a.name||a.slug)?'selected':''}>${escapeHtml(a.name||a.slug)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="label">Server Port</div><div class="desc">MiMo API port</div></div>
+          <span style="font-size:13px;color:var(--text2)">${allSettings.port || 14096}</span>
+        </div>`;
+      break;
+
+    case 'providers':
+      body.innerHTML = `<div class="card-grid">
+        ${providers.map(p => `
+          <div class="card">
+            <div class="name">${escapeHtml(p.name||'Unknown')}</div>
+            <div class="status ${p.status||p.connected?'status-ok':'status-err'}">${p.status||(p.connected?'Connected':'Disconnected')}</div>
+            <div class="actions">
+              ${p.auth_url ? `<button onclick="window.open('${p.auth_url}','oauth','width=600,height=700')">Authorize</button>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+      break;
+
+    case 'skills':
+      body.innerHTML = `<div class="card-grid">
+        ${(skills.length ? skills : [{name:'Loading...',description:'Skills not available'}]).map(s => `
+          <div class="card">
+            <div class="name">${escapeHtml(s.name||'Skill')}</div>
+            <div class="desc" style="font-size:12px;color:var(--text2);margin-top:4px">${escapeHtml(s.description||'')}</div>
+          </div>
+        `).join('')}
+      </div>`;
+      break;
+
+    case 'stats':
+      body.innerHTML = `
+        <div class="setting-row"><div class="label">Sessions</div><span style="font-size:13px;color:var(--text2)">${sessions.length}</span></div>
+        <div class="setting-row"><div class="label">Providers</div><span style="font-size:13px;color:var(--text2)">${providers.length}</span></div>
+        <div class="setting-row"><div class="label">Commands</div><span style="font-size:13px;color:var(--text2)">${commands.length}</span></div>
+        <div class="setting-row"><div class="label">Skills</div><span style="font-size:13px;color:var(--text2)">${skills.length}</span></div>`;
+      break;
+  }
+}
+
+// ====== Theme ======
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme === 'default' ? '' : theme);
+  localStorage.setItem('mimo-theme', theme);
+  try { api('/config', { method: 'POST', body: { theme } }); } catch(e) {}
+  toast('Theme: ' + theme, 'success');
+}
+
+// ====== Init ======
+async function init() {
+  // Load theme from localStorage
+  const savedTheme = localStorage.getItem('mimo-theme');
+  if (savedTheme) setTheme(savedTheme);
+
+  // Load data in parallel
+  await Promise.all([
+    loadSessions(),
+    loadModels(),
+    loadAgents(),
+    loadCommands(),
+    loadSkills(),
+  ]);
+
+  // Periodic refresh
+  setInterval(loadSessions, 30000);
+}
+
+// Add spinner animation
+const style = document.createElement('style');
+style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+document.head.appendChild(style);
+
+// Handle overlay clicks
+$('paletteOverlay').addEventListener('click', (e) => {
+  if (e.target === $('paletteOverlay')) closePalette();
+});
+
+init();
 </script>
 </body>
 </html>

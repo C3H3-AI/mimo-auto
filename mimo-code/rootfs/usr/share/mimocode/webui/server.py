@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""MiMo Code Web UI - serves the SPA and proxies API calls to the mimo server."""
-
+"""MiMo Code Web UI - serves SPA and proxies all API calls to the mimo server."""
 import http.server
 import json
 import os
-import subprocess
 import sys
 import urllib.request
 import urllib.error
+import re
 
 MIMO_PORT = int(os.environ.get("MIMO_PORT", "14096"))
 MIMO_API_BASE = f"http://127.0.0.1:{MIMO_PORT}"
 WEBUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 PORT = int(os.environ.get("WEBUI_PORT", "8099"))
-MIMO_WORKDIR = "/data/mimocode"
+MIMO_WORKDIR = os.environ.get("MIMO_WORKDIR", "/data/mimocode")
 
 
 class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
@@ -56,30 +55,12 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _proxy_request(self, method):
-        target_path = self.path[4:]
+        """Proxy request to the mimo serve API, stripping /api prefix."""
+        target_path = self.path[4:]  # Strip /api prefix
         target_url = f"{MIMO_API_BASE}{target_path}"
 
-        if self.path.startswith("/api/proxy/"):
-            target_url = self.path[11:]
-
-        # Handle chat messages via mimo run subprocess
-        # Browser may call /message, /messages, or /chat
-        is_chat_post = method == "POST" and "/session/" in target_path and (
-            target_path.endswith("/message") or
-            target_path.endswith("/messages") or
-            target_path.endswith("/chat")
-        )
-        is_chat_get = method == "GET" and "/session/" in target_path and (
-            target_path.endswith("/message") or
-            target_path.endswith("/messages")
-        )
-
-        if is_chat_post:
-            self._handle_chat()
-            return
-        if is_chat_get:
-            self._send_messages_stub()
-            return
+        # Special handling for streaming message responses
+        is_stream = method == "POST" and re.match(r"^/session/[^/]+/message$", target_path)
 
         body = None
         content_length = self.headers.get("Content-Length")
@@ -87,24 +68,35 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             body = self.rfile.read(int(content_length))
 
         req = urllib.request.Request(
-            target_url,
-            data=body,
-            method=method,
+            target_url, data=body, method=method,
             headers={
                 "Content-Type": self.headers.get("Content-Type", "application/json"),
+                "Accept": "application/json, application/x-ndjson",
             },
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read()
+            with urllib.request.urlopen(req, timeout=180) as resp:
                 content_type = resp.headers.get("Content-Type", "application/json")
-                self.send_response(resp.status)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(data)
+                data = resp.read()
+
+                if is_stream and "ndjson" in content_type:
+                    # Stream NDJSON back to the browser as chunked response
+                    self.send_response(resp.status)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    # Normal JSON response
+                    self.send_response(resp.status)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+
         except urllib.error.HTTPError as e:
             self.send_response(e.code)
             data = e.read()
@@ -114,84 +106,57 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except urllib.error.URLError as e:
-            self.send_error(502, f"Proxy error: {e.reason}")
+            # Fallback: try mimo run directly for chat
+            if is_stream:
+                self._handle_chat_via_mimo(body)
+            else:
+                self.send_error(502, f"Proxy error: {e.reason}")
 
-    def _handle_chat(self):
-        """Handle chat message by running mimo run as subprocess."""
-        body_len = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(body_len) if body_len else b"{}"
-
+    def _handle_chat_via_mimo(self, body):
+        """Fallback: run mimo subprocess to handle chat when API is unavailable."""
+        import subprocess
         text = ""
-        try:
-            req_data = json.loads(body)
-            msg = req_data.get("message", "")
-            parts = req_data.get("parts", [])
-            if parts and isinstance(parts, list) and len(parts) > 0:
-                text = parts[0].get("text", "")
-            if not text:
-                text = msg
-        except (json.JSONDecodeError, Exception):
-            text = body.decode("utf-8", errors="replace")
+        if body:
+            try:
+                req_data = json.loads(body)
+                text = req_data.get("message", "")
+            except (json.JSONDecodeError, Exception):
+                text = body.decode("utf-8", errors="replace")
 
         if not text:
-            result_text = "Empty message"
-            data = json.dumps({
-                "info": {"role": "assistant"},
-                "parts": [{"type": "text", "text": result_text}]
-            }).encode()
+            result = json.dumps({"role": "assistant", "content": "Empty message"})
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(result)))
             self.end_headers()
-            self.wfile.write(data)
+            self.wfile.write(result.encode())
             return
 
         try:
+            os.makedirs(MIMO_WORKDIR, exist_ok=True)
             result = subprocess.run(
-                ["/usr/local/bin/mimo", "run", "--model", "mimo/mimo-auto", text],
-                cwd=MIMO_WORKDIR,
-                capture_output=True,
-                text=True,
-                timeout=180,
+                ["/usr/local/bin/mimo", "run", "--json", text],
+                cwd=MIMO_WORKDIR, capture_output=True, text=True, timeout=180,
             )
-
-            response_text = result.stdout.strip()
-            if not response_text:
-                response_text = result.stderr.strip() or "No response"
-
-            data = json.dumps({
-                "info": {"role": "assistant"},
-                "parts": [{"type": "text", "text": response_text}]
-            }).encode()
-
+            response = json.dumps({
+                "role": "assistant",
+                "content": result.stdout.strip() or result.stderr.strip() or "No response",
+            })
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(response)))
             self.end_headers()
-            self.wfile.write(data)
-
+            self.wfile.write(response.encode())
         except subprocess.TimeoutExpired:
             self.send_error(504, "AI request timed out")
         except Exception as e:
             self.send_error(500, f"Chat error: {str(e)}")
 
-    def _send_messages_stub(self):
-        """Return an empty message list (browser polls this via GET)."""
-        data = json.dumps([]).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
-
     def log_message(self, format, *args):
-        sys.stderr.write("[MiMo WebUI] %s - %s\n" % (self.client_address[0], format % args))
+        sys.stderr.write(f"[MiMo WebUI] {self.client_address[0]} - {format % args}\n")
 
 
 if __name__ == "__main__":
     server = http.server.HTTPServer(("0.0.0.0", PORT), MiMoProxyHandler)
-    sys.stderr.write(f"[MiMo WebUI] Server listening on port {PORT}\n")
+    sys.stderr.write(f"[MiMo WebUI] Server listening on port {PORT} (mimo -> {MIMO_API_BASE})\n")
     server.serve_forever()
