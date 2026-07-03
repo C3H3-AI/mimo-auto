@@ -1,131 +1,118 @@
-# MiMo Auto — Home Assistant 集成
+# MiMo Code — Home Assistant 集成
 
 在 Home Assistant 中免费使用小米 MiMo Auto AI 模型。
 
 ## 功能特点
 
-- **对话助手** — 在 HA 语音助手中使用 MiMo AI
-- **MiMo Chat 侧边栏面板** — 浏览器内直接聊天，无需 HA 语音助手配置
-- **Claw Assistant 兼容** — 注册为 conversation 实体，可被 Claw Assistant 等智能体发现
+- **侧边栏 Web UI** — HA 侧边栏直接打开 MiMo Code 聊天界面（模型选择、命令面板、主题切换、提供商管理）
+- **HA 对话助手** — 在 HA 语音助手中使用 MiMo Auto 模型
+- **Claw Assistant 兼容** — 注册为 conversation 实体，可被 Claw Assistant 路由
+- **多模式支持** — Plan/Agent/Build 三种交互模式
 - **自动化服务** — 通过 `mimo_auto.chat` 服务在自动化中调用 AI
 
 ## 架构
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  HA 宿主机                       │
-│                                                   │
-│  ┌──────────────────────┐    ┌────────────────┐  │
-│  │  Docker 容器          │    │  宿主机进程      │  │
-│  │  ┌────────────────┐  │    │  ┌────────────┐ │  │
-│  │  │ mimo_auto      │  │    │  │ mimo serve │ │  │
-│  │  │ custom_component│──┼────┼─▶│:14096      │ │  │
-│  │  └────────────────┘  │    │  └────────────┘ │  │
-│  └──────────────────────┘    └────────────────┘  │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                     HA 宿主机                           │
+│                                                         │
+│  ┌──────────────────────┐    ┌──────────────────────┐  │
+│  │  Docker: homeassistant│    │  Docker: addon       │  │
+│  │  ┌────────────────┐  │    │  ┌────────────────┐  │  │
+│  │  │ mimo_auto       │  │    │  │ tcp_proxy      │  │  │
+│  │  │ custom_component│──┼────┼─▶│ 0.0.0.0:14096  │  │  │
+│  │  │ coordinator     │  │    │  └──────┬─────────┘  │  │
+│  │  │ ↓ 检测 addon    │  │    │         ↓            │  │
+│  │  │ √ 已连接        │  │    │  ┌────────────────┐  │  │
+│  │  └────────────────┘  │    │  │ mimo serve      │  │  │
+│  │  ┌────────────────┐  │    │  │ 127.0.0.1:14095 │  │  │
+│  │  │ panel_iframe   │  │    │  └────────────────┘  │  │
+│  │  │ MiMo Chat 侧边栏│──┼────┼── ingress:8099     │  │
+│  │  └────────────────┘  │    │  ┌────────────────┐  │  │
+│  │                      │    │  │ Web UI (SPA)   │  │  │
+│  │                      │    │  │ 模型/设置/命令  │  │  │
+│  │                      │    │  └────────────────┘  │  │
+│  └──────────────────────┘    └──────────────────────┘  │
+└────────────────────────────────────────────────────────┘
 ```
 
-两种模式：
-- **Docker HA + 宿主机模式**（已验证）：HA 跑在 Docker 容器内，宿主机运行 `mimo serve`，通过 host networking 连接
-- **本地模式**：HA 直接启动 `mimo serve` 子进程（适用于 HA Core 直接安装在系统上的场景）
+### 组件说明
+
+本项目包含两个组件：
+
+| 组件 | 类型 | 功能 | 是否可选 |
+|------|------|------|---------|
+| **MiMo Code** | Supervisor Add-on | 运行 `mimo serve` 服务 + Web UI | 推荐（自动管理） |
+| **MiMo Auto** | HA Custom Component | 对话代理 + 服务 + Claw 兼容 | 可选（仅需 HA 集成时） |
+
+### 通信链路
+
+```
+HA 组件 → localhost:14096 → tcp_proxy (addon) → mimo serve (addon)
+HA 侧边栏 → ingress:8099 → Web UI (addon) → mimo serve API
+```
 
 ## 安装
 
-### 验证环境
+### 方式一（推荐）：Add-on + 组件
 
-本集成已在以下环境验证通过：
-
-| 环境 | 值 |
-|------|-----|
-| HA 版本 | 2026.6.4 |
-| 宿主机系统 | Alpine Linux v3.24 (aarch64, musl) |
-| 部署方式 | Docker 容器 + 宿主机 `mimo serve` |
-| 网络模式 | host networking |
-
-### 前置要求
-
-- Home Assistant 容器（host networking 模式）或 Supervised 部署
-- 可通过 Add-on 商店安装，或手动在宿主机安装 Node.js
-
-### 方式一（推荐）：通过 Add-on 安装
-> 适用于 HA OS / Supervised 部署
+**1. 添加仓库到 Add-on 商店**
 
 仓库地址：`https://github.com/C3H3-AI/mimo-auto`
 
 ```
-设置 → 加载项商店 → 右上角三个点 → 仓库 → 添加 https://github.com/C3H3-AI/mimo-auto
+HA → 设置 → 加载项商店 → 右上角三个点 → 仓库 → 添加
 ```
 
-刷新后找到 **MiMo Code** add-on，安装即可。Add-on 会自动安装 `mimo` 并在后台运行 `mimo serve`。
+**2. 安装 MiMo Code**
 
-### 方式二：宿主机手动安装
+刷新后找到 **MiMo Code** add-on，点击安装。安装完成后侧边栏自动出现 **MiMo Code** 入口。
+
+**3. 添加 MiMo Auto 集成（可选）**
+
+```
+HA → 设置 → 设备与服务 → 添加集成 → 搜索 MiMo Auto
+```
+
+端口保持默认 `14096`，集成会自动检测 Add-on 通道，无需额外配置。
+
+### 方式二：仅 Add-on（独立使用）
+
+如果只需要 Web UI 聊天界面，仅安装 Add-on 即可，不需要添加集成。
+
+```
+HA → 设置 → 加载项商店 → 安装 MiMo Code
+```
+
+侧边栏出现 **MiMo Code**，点击即用。
+
+### 方式三：仅组件（手动启动 mimo）
+
+适用于已自行运行 `mimo serve` 的场景：
 
 ```bash
-# 安装 Node.js（如已有可跳过）
-apk add nodejs npm
-
-# 全局安装 mimo CLI
-npm install -g @mimo-ai/cli
-
-# 验证
-mimo --version
+# 启动 mimo 服务
+mimo serve --port 14096
 ```
 
-**⚠️ Alpine Linux（musl）注意：**
-npm 会自动拉取 `mimocode-linux-arm64-musl` 版本，但默认包装脚本可能找到 glibc 版本导致运行失败。验证方法：
-
-```bash
-# 检查实际安装的平台二进制
-ls /usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/
-# 输出应包含 mimocode-linux-arm64-musl/
-
-# 如果默认 mimo 命令报错，用绝对路径启动 musl 版本
-/usr/local/lib/node_modules/@mimo-ai/cli/node_modules/@mimo-ai/mimocode-linux-arm64-musl/bin/mimo serve --port 14096
-```
-
-### 2️⃣ 启动服务并设置开机自启
-
-```bash
-# 手动启动（调试用）
-mimo serve --port 14096 --print-logs
-
-# 设置开机自启（Alpine / OpenRC）
-cat > /etc/local.d/mimoserve.start << 'EOF'
-#!/bin/sh
-MIMO_BIN=$(which mimo)
-nohup "$MIMO_BIN" serve --port 14096 --print-logs >> /var/log/mimo-serve.log 2>&1 &
-EOF
-chmod +x /etc/local.d/mimoserve.start
-rc-update add local
-/etc/local.d/mimoserve.start
-```
-
-### 3️⃣ 部署组件到 HA 容器
-
-### 3️⃣ 部署组件
-
-将 `custom_components/mimo_auto/` 复制到 HA 的 `custom_components` 目录：
-
-```bash
-# 假设 HA 配置目录为 /config
-cp -r custom_components/mimo_auto /config/custom_components/
-```
-
-### 4️⃣ 重启 HA 并添加集成
-
-```
-设置 → 设备与服务 → 添加集成 → 搜索 MiMo Auto
-```
-
-端口默认 `14096`，二进制路径可留空。
+然后将 `custom_components/mimo_auto/` 复制到 HA 的 `custom_components` 目录，重启 HA 并添加集成。
 
 ## 使用
 
-### MiMo Chat 侧边栏面板（v2.0 新增）
+### Web UI 侧边栏（Add-on 自带）
 
-添加集成后，侧边栏会自动出现 **MiMo Chat** 图标。点击即可在浏览器中直接与 MiMo 对话。
+安装 MiMo Code Add-on 后，HA 侧边栏出现 **MiMo Code** 图标。支持：
+
+- **聊天对话** — 流式对话，历史会话管理
+- **模型选择** — 切换不同 AI 模型
+- **命令面板** — Ctrl+K 打开，搜索/执行命令
+- **代理模式** — Plan/Agent/Build 切换
+- **主题切换** — Default/Light/Dracula/Solarized
+- **设置面板** — 提供商、技能、统计信息
 
 ### HA 对话助手
+
+需要安装 MiMo Auto 组件：
 
 ```
 设置 → 语音助手 → 添加助手
@@ -133,25 +120,9 @@ cp -r custom_components/mimo_auto /config/custom_components/
   对话代理: 选 MiMo Auto
 ```
 
-### 直接使用 mimo 命令行
+### Claw Assistant
 
-`mimo` 是一个独立的命令行 AI 助手，不依赖 HA 也可以使用：
-
-```bash
-# 交互式聊天
-mimo
-
-# 单次问答
-mimo --prompt "用一句话介绍小米汽车"
-
-# 指定 session 文件保存历史
-mimo --session my-session.json
-
-# 启动服务（给 HA 或其他客户端用）
-mimo serve --port 14096
-```
-
-在终端里直接敲 `mimo` 回车即可进入交互模式，适合在宿主机上快速测试或日常使用。
+MiMo Auto 会自动注册 `conversation.mimo_auto` 实体，Claw Assistant 配置中可直接选择。
 
 ### 自动化调用
 
@@ -162,43 +133,89 @@ data:
 response_variable: reply
 ```
 
-## 工作原理
-
-组件通过启动本地 `mimo serve` 进程调用 MiMo Auto 免费 AI 模型。小米服务端对 MiMo Code 原生二进制（`mimo.exe`/`mimo`）携带的设备指纹和签名进行认证，其他第三方客户端直接调用 API 会返回 403。
-
-```
-HA → mimo_auto 组件 → mimo serve (本地) → MiMo 服务端
-                        ↑
-                 保留原生二进制指纹
-```
-
-## 配置
+## Add-on 配置
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `port` | `14096` | `mimo serve` 监听端口 |
-| `mimo_bin_path` | 自动查找 | `mimo` 二进制路径 |
+| `port` | `14096` | 对外服务端口（内部自动偏移为 port-1）|
+
+## 组件配置
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `port` | `14096` | 连接 Add-on 的端口 |
+| `auto_install` | `true` | 找不到 mimo 时自动安装 |
+
+## 验证环境
+
+| 环境 | 值 |
+|------|-----|
+| HA 版本 | 2026.7+ |
+| 宿主机系统 | HAOS / Supervised |
+| Add-on 架构 | aarch64 / amd64 |
+| 部署方式 | Supervisor Add-on + Custom Component |
+
+## 工作原理
+
+```
+HA 对话 → mimo_auto 组件 → HTTP → addon tcp_proxy → mimo serve → MiMo API
+                                   ↑
+                            TCP 代理 (0.0.0.0:PORT → 127.0.0.1:PORT-1)
+                            解决 mimo serve 仅绑定 localhost 的限制
+```
+
+小米服务端对 MiMo Code 原生二进制携带的设备指纹和签名进行认证，其他方式直接调用 API 返回 403。
 
 ## 文件结构
 
 ```
-custom_components/mimo_auto/
-├── __init__.py       组件入口（含面板注册）
-├── agent_impl.py     对话代理核心逻辑（含 SSE 流式解析）
-├── coordinator.py    mimo serve 进程管理（含健康检查）
-├── conversation.py   对话实体（Claw Assistant 兼容）
-├── config_flow.py    UI 配置流程
-├── const.py          常量
-├── entity.py         实体注册（手动注册 fallback）
-├── mimo_proxy.py     API 代理（解决 HTTPS→HTTP 混合内容）
-├── manifest.json     组件声明
-├── services.yaml     服务定义
-└── www/
-    └── index.html    MiMo Chat 侧边栏面板
+mimo-auto/
+├── custom_components/mimo_auto/     ← HA 自定义组件
+│   ├── __init__.py                  组件入口
+│   ├── agent_impl.py               对话代理核心
+│   ├── coordinator.py              服务检测 + Add-on 通道
+│   ├── conversation.py             对话实体 (Claw 兼容)
+│   ├── config_flow.py              UI 配置流程
+│   ├── const.py                    常量
+│   ├── mimo_proxy.py               API 代理
+│   ├── manifest.json               组件声明
+│   ├── services.yaml               服务定义
+│   └── www/index.html              旧版 Web UI（保留）
+├── mimo-code/                       ← Add-on 包
+│   ├── config.yaml                 Add-on 配置
+│   ├── Dockerfile                  多阶段构建
+│   ├── build.yaml                  构建参数
+│   └── rootfs/
+│       ├── etc/s6-overlay/s6-rc.d/
+│       │   ├── mimocode/           mimo serve 服务
+│       │   └── mimocode-webui/     Web UI 服务
+│       └── usr/share/mimocode/webui/
+│           ├── index.html          完整 Web UI (SPA)
+│           ├── server.py           HTTP 代理服务器
+│           └── tcp_proxy.py        TCP 端口转发代理 ★
+├── hacs.json                        HACS 配置
+└── README.md                        本文件
 ```
 
-## 已知限制
+## 更新日志
 
-- 首次对话需等待 `mimo serve` 初始化（约 10-15 秒）
-- 每次对话创建新 session，不保留上下文
-- 依赖宿主机 Node.js 运行时
+### v3.0.0
+
+- **Add-on 独立化** — MiMo Code 作为独立 Add-on 运行，自带侧边栏 Web UI
+- **TCP 端口转发** — 解决 `mimo serve` 仅绑定 localhost 的问题，支持 bridge 网络模式
+- **Ingress 侧边栏** — 通过 Supervisor ingress 在 HA 侧边栏内嵌 Web UI
+- **Web UI 增强** — 模型选择、命令面板 Ctrl+K、主题切换、代理模式、提供商管理
+- **Add-on 检测** — 组件自动检测 Add-on 通道，无需手动配置连接地址
+- **架构重构** — 分离 Add-on（运行层）和 Custom Component（集成层）
+
+### v2.1.0
+
+- 对话实体注册 (Claw Assistant 兼容)
+- 流式消息处理
+- 崩溃自动恢复
+
+### v2.0.0
+
+- MiMo Chat 侧边栏面板
+- 对话代理 (HA Conversation Agent)
+- 自动化服务
