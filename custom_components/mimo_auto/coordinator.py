@@ -89,7 +89,16 @@ class MiMoCoordinator:
                 _LOGGER.warning("MiMo server is already running")
                 return True
 
-            # Step 0: Try detecting HA Add-on via Supervisor API
+            # Step 0: Try connecting to an existing server (addon via TCP proxy, or standalone)
+            if await self._check_server_healthy():
+                _LOGGER.info(
+                    "Connected to existing MiMo server at %s",
+                    self._server_url,
+                )
+                self._mark_running()
+                return True
+
+            # Step 1: Try detecting HA Add-on via Supervisor API (fallback if direct connect failed)
             if await self._detect_addon():
                 _LOGGER.info(
                     "Connected to MiMo Code add-on at %s",
@@ -98,8 +107,7 @@ class MiMoCoordinator:
                 self._mark_running()
                 return True
 
-            # Step 1: Try connecting to an existing server first
-            if await self._check_server_healthy():
+            # Step 2: No existing server found, try to start one as subprocess
                 _LOGGER.info(
                     "Connected to existing MiMo server at %s",
                     self._server_url,
@@ -456,40 +464,28 @@ class MiMoCoordinator:
         """Detect if the MiMo Code add-on is running via Supervisor API.
 
         Checks both regular and local addon slugs. Returns True if the
-        addon is detected and in 'started' state, without requiring
-        direct HTTP reachability to the server port.
+        addon is detected and in 'started' state.
         """
         try:
             from homeassistant.components.hassio import get_addons_info
 
             addons = get_addons_info(self._hass)
-            _LOGGER.warning(
-                "ADDON_DBG: addons_type=%s keys=%s",
-                type(addons).__name__,
-                list(addons.keys()) if isinstance(addons, dict) else "N/A",
-            )
             if not isinstance(addons, dict):
                 return False
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 info = addons.get(slug)
-                if isinstance(info, dict):
-                    _LOGGER.warning(
-                        "ADDON_DBG: slug=%s state=%s", slug, info.get("state", "?")
+                if isinstance(info, dict) and info.get("state") == "started":
+                    _LOGGER.info(
+                        "Detected MiMo Code add-on '%s' is running", slug
                     )
-                    if info.get("state") == "started":
-                        _LOGGER.info(
-                            "Detected MiMo Code add-on '%s' is running", slug
-                        )
-                        return True
+                    return True
 
             return False
 
         except (ImportError, ModuleNotFoundError):
-            _LOGGER.warning("Addon detection: import failed (not on Supervised/OS?)")
             return False
-        except Exception as exc:
-            _LOGGER.warning("Addon detection error: %s", exc)
+        except Exception:
             return False
 
     async def _wait_for_server_ready(self, timeout: int) -> bool:
