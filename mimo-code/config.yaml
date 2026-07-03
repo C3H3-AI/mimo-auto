@@ -1,36 +1,16 @@
 name: MiMo Code
 version: 2.1.1-beta.1
 slug: mimo-code
-description: MiMo Code AI Server — Run AI agents in your Home Assistant
+description: MiMo Code AI Server
 url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64
   - amd64
-  - armv7
 init: false
-ingress: true
-ingress_port: 8099
-homeassistant: "2024.1.0"
-hassio_api: true
-hassio_role: default
-homeassistant_api: true
-panel_icon: mdi:chat-processing
-panel_title: MiMo Code
-ports:
-  14096/tcp: 14096
-  8099/tcp: null
-ports_description:
-  14096/tcp: MiMo AI API
-  8099/tcp: Web UI (handled by ingress)
-options:
-  port: 14096
-  log_level: info
-schema:
-  port: int(1024,65535)
-  log_level: list(debug|info|warning|error)
-map:
-  - config:rw
-  - share:rw
 startup: application
 boot: auto
-watchdog: "http://127.0.0.1:14096/session"
+host_network: true
+options:
+  port: 14096
+schema:
+  port: int(1024,65535)
