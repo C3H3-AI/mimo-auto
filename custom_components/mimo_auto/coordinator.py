@@ -255,8 +255,6 @@ class MiMoCoordinator:
     async def _check_addon_healthy(self) -> bool:
         """Check addon health via Supervisor API as fallback."""
         try:
-            if "hassio" not in self._hass.config.components:
-                return False
             from homeassistant.components.hassio import async_get_addon_info
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
@@ -453,23 +451,28 @@ class MiMoCoordinator:
         direct HTTP reachability to the server port.
         """
         try:
-            # Only available on Supervised/OS installs
-            if "hassio" not in self._hass.config.components:
-                return False
-
             from homeassistant.components.hassio import async_get_addon_info
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 try:
                     result = await async_get_addon_info(self._hass, slug)
-                    # Result is the Supervisor API response: {"result":"ok","data":{...}}
+                    _LOGGER.debug(
+                        "Addon check '%s': result=%s",
+                        slug, str(result)[:300] if result else "None",
+                    )
+                    # Result is the Supervisor API response
                     data = result.get("data", {}) if isinstance(result, dict) else result
-                    if isinstance(data, dict) and data.get("state") == "started":
-                        _LOGGER.info(
-                            "Detected MiMo Code add-on '%s' is running", slug
+                    if isinstance(data, dict):
+                        _LOGGER.debug(
+                            "Addon '%s' state=%s", slug, data.get("state", "?"),
                         )
-                        return True
-                except Exception:
+                        if data.get("state") == "started":
+                            _LOGGER.info(
+                                "Detected MiMo Code add-on '%s' is running", slug
+                            )
+                            return True
+                except Exception as exc:
+                    _LOGGER.debug("Addon check '%s' failed: %s", slug, exc)
                     continue
 
             return False
