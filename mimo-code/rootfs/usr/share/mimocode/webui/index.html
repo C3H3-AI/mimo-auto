@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -249,9 +249,9 @@ body {
         <h1>MiMo</h1>
         <span class="badge" id="versionBadge">v2.1</span>
       </div>
-      <button class="new-session-btn" onclick="createSession()" title="New Session">+</button>
+      <button class="new-session-btn" onclick="createSession()" title="新建会话">+</button>
     </div>
-    <input class="search-box" id="searchInput" placeholder="Search sessions..." oninput="filterSessions()">
+    <input class="search-box" id="searchInput" placeholder="搜索会话..." oninput="filterSessions()">
     <div class="session-list" id="sessionList"></div>
   </aside>
 
@@ -260,27 +260,27 @@ body {
     <div class="chat-header">
       <div class="info">
         <h2 id="currentTitle">MiMo Code</h2>
-        <div class="sub" id="currentSub">Select a session or create a new one</div>
+        <div class="sub" id="currentSub">选择一个会话或新建一个</div>
       </div>
       <div class="toolbar">
-        <select id="modelSelect" onchange="switchModel(this.value)" title="Model"><option value="">Loading...</option></select>
-        <select id="agentSelect" onchange="switchAgent(this.value)" title="Agent Mode"><option value="">Loading...</option></select>
-        <button onclick="openSettings()" title="Settings">&#x2699;</button>
+        <select id="modelSelect" onchange="switchModel(this.value)" title="模型"><option value="">加载中...</option></select>
+        <select id="agentSelect" onchange="switchAgent(this.value)" title="代理模式"><option value="">加载中...</option></select>
+        <button onclick="openSettings()" title="设置">&#x2699;</button>
       </div>
     </div>
 
     <div id="messages" class="messages">
       <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text2);flex-direction:column;gap:12px">
         <div style="font-size:48px;opacity:0.3">&#x1F916;</div>
-        <h3 style="font-size:18px;color:var(--text)">Welcome to MiMo Code</h3>
-        <p style="font-size:14px;text-align:center;max-width:320px">Press <kbd>Ctrl+K</kbd> to open commands, or start typing below.</p>
+        <h3 style="font-size:18px;color:var(--text)">欢迎使用 MiMo Code</h3>
+        <p style="font-size:14px;text-align:center;max-width:320px">按 <kbd>Ctrl+K</kbd> 打开命令，或开始输入消息。</p>
       </div>
     </div>
 
     <div class="input-area">
       <div style="flex:1;display:flex;flex-direction:column;gap:4px">
-        <textarea id="chatInput" rows="1" placeholder="Type a message... (Ctrl+K for commands)" onkeydown="handleKeyDown(event)"></textarea>
-        <div class="hint" id="modeHint">Agent mode</div>
+        <textarea id="chatInput" rows="1" placeholder="输入消息... (Ctrl+K 打开命令)" onkeydown="handleKeyDown(event)"></textarea>
+        <div class="hint" id="modeHint">代理模式</div>
       </div>
       <button class="send-btn" id="sendBtn" onclick="sendMessage()">&#x2191;</button>
     </div>
@@ -290,7 +290,7 @@ body {
 <!-- Command Palette Overlay -->
 <div class="overlay" id="paletteOverlay" onclick="if(event.target===this)closePalette()">
   <div class="palette">
-    <input id="paletteInput" placeholder="Type a command..." oninput="filterPalette()" onkeydown="paletteKeydown(event)" autofocus>
+    <input id="paletteInput" placeholder="输入命令..." oninput="filterPalette()" onkeydown="paletteKeydown(event)" autofocus>
     <div class="results" id="paletteResults"></div>
   </div>
 </div>
@@ -298,14 +298,14 @@ body {
 <!-- Settings Drawer -->
 <div class="drawer" id="settingsDrawer">
   <div class="drawer-header">
-    <h2>Settings</h2>
+    <h2>设置</h2>
     <button class="close-btn" onclick="closeSettings()">&times;</button>
   </div>
   <div class="drawer-tabs" id="settingsTabs">
-    <button class="active" onclick="switchSettingsTab('general',this)">General</button>
-    <button onclick="switchSettingsTab('providers',this)">Providers</button>
-    <button onclick="switchSettingsTab('skills',this)">Skills</button>
-    <button onclick="switchSettingsTab('stats',this)">Stats</button>
+    <button class="active" onclick="switchSettingsTab('general',this)">通用</button>
+    <button onclick="switchSettingsTab('providers',this)">提供商</button>
+    <button onclick="switchSettingsTab('skills',this)">技能</button>
+    <button onclick="switchSettingsTab('stats',this)">统计</button>
   </div>
   <div class="drawer-body" id="settingsBody"></div>
 </div>
@@ -322,6 +322,9 @@ let agents = [];
 let providers = [];
 let skills = [];
 let allSettings = {};
+
+// Theme name map for Chinese display
+const THEME_NAMES = { 'default': '默认', 'light': '浅色', 'dark': '深色', 'dracula': '暗紫', 'solarized': '日晒' };
 const THEMES = ['default', 'light', 'dracula', 'solarized'];
 
 // ====== Helpers ======
@@ -379,12 +382,12 @@ function renderSessions() {
   const q = $('searchInput').value.toLowerCase();
   const filtered = sessions.filter(s => (s.title||s.slug||'').toLowerCase().includes(q));
   if (!filtered.length) {
-    list.innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;font-size:13px">No sessions</div>';
+    list.innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;font-size:13px">暂无会话</div>';
     return;
   }
   list.innerHTML = filtered.map(s => {
     const id = s.id || s.slug;
-    const title = s.title || s.slug || 'Untitled';
+    const title = s.title || s.slug || '未命名';
     const active = currentSession && (currentSession.id === id || currentSession.slug === id) ? 'active' : '';
     const time = s.time ? new Date(s.time.created || s.time).toLocaleString() : '';
     return `<div class="session-item ${active}" onclick="selectSession('${id}')">
@@ -405,21 +408,21 @@ async function selectSession(id) {
     }
     const title = currentSession.title || currentSession.slug || 'Session';
     $('currentTitle').textContent = title;
-    $('currentSub').textContent = 'Session active';
+    $('currentSub').textContent = '会话中';
     renderSessions();
     loadMessages();
     $('chatInput').focus();
-  } catch(e) { toast('Failed to load session: ' + e.message, 'error'); }
+  } catch(e) { toast('加载会话失败: ' + e.message, 'error'); }
 }
 
 async function createSession() {
   try {
     const data = await api('/session', { method: 'POST', body: {} });
-    toast('Session created', 'success');
+    toast('会话已创建', 'success');
     await loadSessions();
     const id = data.id || data.slug;
     if (id) selectSession(id);
-  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  } catch(e) { toast('失败: ' + e.message, 'error'); }
 }
 
 async function loadMessages() {
@@ -431,7 +434,7 @@ async function loadMessages() {
     const msgs = Array.isArray(data) ? data : (data.messages || []);
     renderMessages(msgs);
   } catch(e) {
-    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2)">No messages yet</div>';
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2)">暂无消息</div>';
   }
 }
 
@@ -439,7 +442,7 @@ function renderMessages(msgs) {
   const container = $('messages');
   if (!msgs || !msgs.length) {
     container.innerHTML = `<div style="margin-bottom:20px;padding:16px;background:var(--surface);border-radius:var(--radius);font-size:14px;line-height:1.6;color:var(--text2);text-align:center">
-      Start a conversation. Ask questions or give commands.</div>`;
+      开始对话吧，可以提问或发出指令。</div>`;
     return;
   }
   container.innerHTML = msgs.map(m => {
@@ -462,7 +465,7 @@ async function sendMessage() {
   if (!text || loading) return;
 
   if (!currentSession) {
-    toast('Please create a session first', 'error');
+    toast('请先创建会话', 'error');
     return;
   }
 
@@ -513,7 +516,7 @@ async function sendMessage() {
     const loader = $(loadId);
     if (loader) loader.remove();
     container.insertAdjacentHTML('beforeend',
-      `<div class="message assistant"><div class="avatar">&#x1F916;</div><div class="bubble" style="color:var(--red)">Error: ${escapeHtml(e.message)}</div></div>`);
+      `<div class="message assistant"><div class="avatar">&#x1F916;</div><div class="bubble" style="color:var(--red)">错误: ${escapeHtml(e.message)}</div></div>`);
   }
 
   loading = false;
@@ -555,6 +558,10 @@ function filterPalette() {
   const q = $('paletteInput').value.toLowerCase();
   const results = $('paletteResults');
   const items = commands.filter(c => (c.name||c.command||'').toLowerCase().includes(q));
+  if (!items.length) {
+    results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px">无结果</div>';
+    return;
+  }
   results.innerHTML = items.slice(0, 20).map((c, i) =>
     `<div class="item${i===0?' selected':''}" onclick="executeCommand('${c.command||c.name}')">
       <div><div class="name">${escapeHtml(c.name||c.command||c)}</div><div class="desc">${escapeHtml(c.description||'')}</div></div>
@@ -587,11 +594,13 @@ function executeCommand(cmd) {
 async function loadModels() {
   try {
     const data = await api('/provider');
-    providers = Array.isArray(data) ? data : (data.providers || []);
+    // API returns { "all": [{"name": "...", "models": {"model-id": {...}, ...}}] }
+    providers = Array.isArray(data) ? data : (data.all || []);
     const sel = $('modelSelect');
-    sel.innerHTML = '<option value="">Select model...</option>';
+    sel.innerHTML = '<option value="">选择模型...</option>';
     providers.forEach(p => {
-      const models = p.models || [p.model || p.name].filter(Boolean);
+      // models is a dict (keyed by model id), extract keys
+      const models = Object.keys(p.models || {});
       models.forEach(m => {
         sel.innerHTML += `<option value="${m}">${escapeHtml(p.name||'')} / ${escapeHtml(m)}</option>`;
       });
@@ -610,8 +619,9 @@ async function switchModel(model) {
   if (!model) return;
   try {
     await api('/config', { method: 'POST', body: { model } });
-    toast('Model switched to ' + model, 'success');
-  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+    allSettings.model = model; // Update local cache
+    toast('模型已切换到 ' + model, 'success');
+  } catch(e) { toast('失败: ' + e.message, 'error'); }
 }
 
 // ====== Agents ======
@@ -620,24 +630,25 @@ async function loadAgents() {
     const data = await api('/agent');
     agents = Array.isArray(data) ? data : [];
     const sel = $('agentSelect');
-    sel.innerHTML = '<option value="">Agent mode...</option>';
+    sel.innerHTML = '<option value="">代理模式...</option>';
     agents.forEach(a => {
       sel.innerHTML += `<option value="${a.name||a.slug}">${escapeHtml(a.name||a.slug)}</option>`;
     });
     // Set mode hint
     if (agents.length) {
-      $('modeHint').textContent = `${agents[0].name||'Agent'} mode`;
+      $('modeHint').textContent = `${agents[0].name||'Agent'} 模式`;
     }
   } catch(e) { console.error('loadAgents:', e); }
 }
 
 async function switchAgent(agent) {
   if (!agent) return;
-  $('modeHint').textContent = `${agent} mode`;
+  $('modeHint').textContent = `${agent} 模式`;
   try {
     await api('/config', { method: 'POST', body: { agent } });
-    toast('Switched to ' + agent, 'success');
-  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+    allSettings.agent = agent; // Update local cache
+    toast('已切换到 ' + agent, 'success');
+  } catch(e) { toast('失败: ' + e.message, 'error'); }
 }
 
 // ====== Skills ======
@@ -649,8 +660,10 @@ async function loadSkills() {
 }
 
 // ====== Settings Drawer ======
-function openSettings() {
+async function openSettings() {
   $('settingsDrawer').classList.add('open');
+  // Cache config once when opening settings
+  try { allSettings = await api('/config') || {}; } catch(e) {}
   loadSettingsTab('general');
 }
 
@@ -664,35 +677,35 @@ function switchSettingsTab(tab, btn) {
   loadSettingsTab(tab);
 }
 
-async function loadSettingsTab(tab) {
+function loadSettingsTab(tab) {
   const body = $('settingsBody');
-  try { allSettings = await api('/config') || {}; } catch(e) {}
+  // Use cached allSettings (fetched once in openSettings)
 
   switch(tab) {
     case 'general':
       body.innerHTML = `
         <div class="setting-row">
-          <div><div class="label">Theme</div><div class="desc">UI color theme</div></div>
+          <div><div class="label">主题</div><div class="desc">界面主题</div></div>
           <select onchange="setTheme(this.value)">
-            ${THEMES.map(t => `<option value="${t}" ${(allSettings.theme||'default')===t?'selected':''}>${t}</option>`).join('')}
+            ${THEMES.map(t => `<option value="${t}" ${(allSettings.theme||'default')===t?'selected':''}>${THEME_NAMES[t]||t}</option>`).join('')}
           </select>
         </div>
         <div class="setting-row">
-          <div><div class="label">Model</div><div class="desc">AI model</div></div>
+          <div><div class="label">模型</div><div class="desc">AI 模型</div></div>
           <select onchange="switchModel(this.value)">
-            ${providers.flatMap(p => (p.models||[p.model||p.name]).filter(Boolean)).map(m =>
+            ${providers.reduce((acc, p) => acc.concat(Object.keys(p.models || {})), []).map(m =>
               `<option value="${m}" ${allSettings.model===m?'selected':''}>${escapeHtml(m)}</option>`
             ).join('')}
           </select>
         </div>
         <div class="setting-row">
-          <div><div class="label">Agent Mode</div><div class="desc">Interaction mode</div></div>
+          <div><div class="label">代理模式</div><div class="desc">交互模式</div></div>
           <select onchange="switchAgent(this.value)">
             ${agents.map(a => `<option value="${a.name||a.slug}" ${(allSettings.agent||'')===(a.name||a.slug)?'selected':''}>${escapeHtml(a.name||a.slug)}</option>`).join('')}
           </select>
         </div>
         <div class="setting-row">
-          <div><div class="label">Server Port</div><div class="desc">MiMo API port</div></div>
+          <div><div class="label">服务端口</div><div class="desc">MiMo API 端口</div></div>
           <span style="font-size:13px;color:var(--text2)">${allSettings.port || 14096}</span>
         </div>`;
       break;
@@ -701,10 +714,10 @@ async function loadSettingsTab(tab) {
       body.innerHTML = `<div class="card-grid">
         ${providers.map(p => `
           <div class="card">
-            <div class="name">${escapeHtml(p.name||'Unknown')}</div>
-            <div class="status ${p.status||p.connected?'status-ok':'status-err'}">${p.status||(p.connected?'Connected':'Disconnected')}</div>
+            <div class="name">${escapeHtml(p.name||'未知')}</div>
+            <div class="status ${p.status||p.connected?'status-ok':'status-err'}">${p.status||(p.connected?'已连接':'未连接')}</div>
             <div class="actions">
-              ${p.auth_url ? `<button onclick="window.open('${p.auth_url}','oauth','width=600,height=700')">Authorize</button>` : ''}
+              ${p.auth_url ? `<button onclick="window.open('${p.auth_url}','oauth','width=600,height=700')">授权</button>` : ''}
             </div>
           </div>
         `).join('')}
@@ -713,9 +726,9 @@ async function loadSettingsTab(tab) {
 
     case 'skills':
       body.innerHTML = `<div class="card-grid">
-        ${(skills.length ? skills : [{name:'Loading...',description:'Skills not available'}]).map(s => `
+        ${(skills.length ? skills : [{name:'加载中...',description:'技能不可用'}]).map(s => `
           <div class="card">
-            <div class="name">${escapeHtml(s.name||'Skill')}</div>
+            <div class="name">${escapeHtml(s.name||'技能')}</div>
             <div class="desc" style="font-size:12px;color:var(--text2);margin-top:4px">${escapeHtml(s.description||'')}</div>
           </div>
         `).join('')}
@@ -724,10 +737,10 @@ async function loadSettingsTab(tab) {
 
     case 'stats':
       body.innerHTML = `
-        <div class="setting-row"><div class="label">Sessions</div><span style="font-size:13px;color:var(--text2)">${sessions.length}</span></div>
-        <div class="setting-row"><div class="label">Providers</div><span style="font-size:13px;color:var(--text2)">${providers.length}</span></div>
-        <div class="setting-row"><div class="label">Commands</div><span style="font-size:13px;color:var(--text2)">${commands.length}</span></div>
-        <div class="setting-row"><div class="label">Skills</div><span style="font-size:13px;color:var(--text2)">${skills.length}</span></div>`;
+        <div class="setting-row"><div class="label">会话数</div><span style="font-size:13px;color:var(--text2)">${sessions.length}</span></div>
+        <div class="setting-row"><div class="label">提供商</div><span style="font-size:13px;color:var(--text2)">${providers.length}</span></div>
+        <div class="setting-row"><div class="label">命令数</div><span style="font-size:13px;color:var(--text2)">${commands.length}</span></div>
+        <div class="setting-row"><div class="label">技能数</div><span style="font-size:13px;color:var(--text2)">${skills.length}</span></div>`;
       break;
   }
 }
@@ -737,7 +750,7 @@ function setTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme === 'default' ? '' : theme);
   localStorage.setItem('mimo-theme', theme);
   try { api('/config', { method: 'POST', body: { theme } }); } catch(e) {}
-  toast('Theme: ' + theme, 'success');
+  toast('主题: ' + (THEME_NAMES[theme] || theme), 'success');
 }
 
 // ====== Init ======
