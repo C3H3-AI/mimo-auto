@@ -20,32 +20,47 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=WEBUI_DIR, **kwargs)
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        super().end_headers()
+        try:
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            super().end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_GET(self):
-        if self.path.startswith("/api/"):
-            self._proxy_request("GET")
-        else:
-            super().do_GET()
+        try:
+            if self.path.startswith("/api/"):
+                self._proxy_request("GET")
+            else:
+                super().do_GET()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self):
-        if self.path.startswith("/api/"):
-            self._proxy_request("POST")
-        else:
-            self.send_error(405)
+        try:
+            if self.path.startswith("/api/"):
+                self._proxy_request("POST")
+            else:
+                self.send_error(405)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_DELETE(self):
-        if self.path.startswith("/api/"):
-            self._proxy_request("DELETE")
-        else:
-            self.send_error(405)
+        try:
+            if self.path.startswith("/api/"):
+                self._proxy_request("DELETE")
+            else:
+                self.send_error(405)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_PATCH(self):
-        if self.path.startswith("/api/"):
-            self._proxy_request("PATCH")
-        else:
-            self.send_error(405)
+        try:
+            if self.path.startswith("/api/"):
+                self._proxy_request("PATCH")
+            else:
+                self.send_error(405)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -87,7 +102,11 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_header("Transfer-Encoding", "chunked")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    self.wfile.write(data)
+                    try:
+                        self.wfile.write(data)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
                 else:
                     # Normal JSON response
                     self.send_response(resp.status)
@@ -104,7 +123,10 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         except urllib.error.URLError as e:
             # Fallback: try mimo run directly for chat
             if is_stream:
@@ -129,7 +151,10 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
-            self.wfile.write(result.encode())
+            try:
+                self.wfile.write(result.encode())
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         try:
