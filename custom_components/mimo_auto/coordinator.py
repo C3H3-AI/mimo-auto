@@ -257,7 +257,7 @@ class MiMoCoordinator:
         try:
             from homeassistant.components.hassio import get_addons_info
 
-            addons = await get_addons_info(self._hass)
+            addons = get_addons_info(self._hass)
             if not isinstance(addons, dict):
                 return False
 
@@ -453,7 +453,7 @@ class MiMoCoordinator:
         try:
             from homeassistant.components.hassio import get_addons_info
 
-            addons = await get_addons_info(self._hass)
+            addons = get_addons_info(self._hass)
             if not isinstance(addons, dict):
                 return False
 
