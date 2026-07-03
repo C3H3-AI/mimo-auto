@@ -23,6 +23,8 @@ SERVER_STOP_TIMEOUT_SECONDS = 10
 MAX_RESTART_ATTEMPTS = 3
 PROCESS_NAME = "mimo"
 ADDON_SLUG = "mimo-code"
+# Alternative slug for locally installed addon
+ADDON_SLUG_LOCAL = "local_mimo-code"
 
 # Conversation attributes
 ATTR_MESSAGE = "message"

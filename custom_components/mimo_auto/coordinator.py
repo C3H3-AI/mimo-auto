@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     ADDON_SLUG,
+    ADDON_SLUG_LOCAL,
     CONF_AUTO_INSTALL,
     CONF_MIMO_BIN,
     CONF_PORT,
@@ -216,8 +217,8 @@ class MiMoCoordinator:
     async def async_check_health(self) -> bool:
         """Check if the server is healthy by making a lightweight request.
 
-        Sends a GET request to the /session endpoint of the server to verify
-        it is still responsive. In external server mode, simply checks HTTP.
+        In external server mode, first tries direct HTTP, then falls back
+        to Supervisor addon state API.
 
         Returns:
             True if the server responded successfully, False otherwise.
@@ -226,9 +227,12 @@ class MiMoCoordinator:
             _LOGGER.warning("MiMo server process is no longer running")
             return False
 
-        # In external server mode, just check HTTP reachability
+        # In external server mode, try HTTP first, then Supervisor API
         if getattr(self._process, "pid", None) == "external":
-            return await self._check_server_healthy()
+            if await self._check_server_healthy():
+                return True
+            # Fallback: check addon state via Supervisor API
+            return await self._check_addon_healthy()
 
         try:
             timeout = aiohttp.ClientTimeout(total=5)
@@ -246,6 +250,24 @@ class MiMoCoordinator:
                     return False
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.warning("MiMo server health check failed: %s", err)
+            return False
+
+    async def _check_addon_healthy(self) -> bool:
+        """Check addon health via Supervisor API as fallback."""
+        try:
+            if "hassio" not in self._hass.config.components:
+                return False
+            from homeassistant.components.hassio import async_get_addon_info
+
+            for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
+                try:
+                    info = await async_get_addon_info(self._hass, slug)
+                    if info and (isinstance(info, dict) and info.get("state") == "started"):
+                        return True
+                except Exception:
+                    continue
+            return False
+        except Exception:
             return False
 
     async def _resolve_mimo_binary(self) -> str | None:
@@ -425,9 +447,9 @@ class MiMoCoordinator:
     async def _detect_addon(self) -> bool:
         """Detect if the MiMo Code add-on is running via Supervisor API.
 
-        This only works on HA Supervised/OS installations. On Docker + host
-        networking setups (the current deployment), this returns False and
-        falls through to the existing external server check.
+        Checks both regular and local addon slugs. Returns True if the
+        addon is detected and in 'started' state, without requiring
+        direct HTTP reachability to the server port.
         """
         try:
             # Only available on Supervised/OS installs
@@ -436,16 +458,21 @@ class MiMoCoordinator:
 
             from homeassistant.components.hassio import async_get_addon_info
 
-            info = await async_get_addon_info(self._hass, ADDON_SLUG)
-            if not info:
-                return False
+            for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
+                try:
+                    info = await async_get_addon_info(self._hass, slug)
+                    if not info:
+                        continue
+                    state = info.get("state") if isinstance(info, dict) else None
+                    if state == "started":
+                        _LOGGER.info(
+                            "Detected MiMo Code add-on '%s' is running", slug
+                        )
+                        return True
+                except Exception:
+                    continue
 
-            state = info.get("state") if isinstance(info, dict) else None
-            if state != "started":
-                return False
-
-            _LOGGER.info("Detected MiMo Code add-on is running")
-            return await self._check_server_healthy()
+            return False
 
         except (ImportError, ModuleNotFoundError):
             return False
