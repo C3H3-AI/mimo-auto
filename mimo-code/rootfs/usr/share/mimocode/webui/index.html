@@ -312,7 +312,8 @@ body {
 
 <script>
 // ====== State ======
-const API = '/api';
+const BASE_PATH = window.location.pathname.replace(/\/+$/, '');
+const API = BASE_PATH + '/api';
 let sessions = [];
 let currentSession = null;
 let loading = false;
