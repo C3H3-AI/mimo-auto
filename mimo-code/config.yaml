@@ -11,6 +11,7 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:chat-processing
 panel_title: MiMo Code
+host_network: true
 ports:
   14096/tcp: 14096
   8099/tcp: null
