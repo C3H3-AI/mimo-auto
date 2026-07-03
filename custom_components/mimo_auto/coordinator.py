@@ -261,8 +261,9 @@ class MiMoCoordinator:
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 try:
-                    info = await async_get_addon_info(self._hass, slug)
-                    if info and (isinstance(info, dict) and info.get("state") == "started"):
+                    result = await async_get_addon_info(self._hass, slug)
+                    data = result.get("data", {}) if isinstance(result, dict) else result
+                    if isinstance(data, dict) and data.get("state") == "started":
                         return True
                 except Exception:
                     continue
@@ -460,11 +461,10 @@ class MiMoCoordinator:
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 try:
-                    info = await async_get_addon_info(self._hass, slug)
-                    if not info:
-                        continue
-                    state = info.get("state") if isinstance(info, dict) else None
-                    if state == "started":
+                    result = await async_get_addon_info(self._hass, slug)
+                    # Result is the Supervisor API response: {"result":"ok","data":{...}}
+                    data = result.get("data", {}) if isinstance(result, dict) else result
+                    if isinstance(data, dict) and data.get("state") == "started":
                         _LOGGER.info(
                             "Detected MiMo Code add-on '%s' is running", slug
                         )
