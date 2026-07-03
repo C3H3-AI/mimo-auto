@@ -2,6 +2,9 @@
 # ============================================================
 # MiMo Code AI Server — S6 Service Entry
 # Managed by s6-overlay, auto-restarts on crash
+#
+# Architecture:
+#   TCP Proxy (0.0.0.0:$PORT) → mimo serve (127.0.0.1:$INNER_PORT)
 # ============================================================
 
 # Use /data/mimocode as working directory so mimo can create its project files
@@ -19,4 +22,17 @@ else
     PORT=14096
 fi
 
-exec /usr/local/bin/mimo serve --port "${PORT}"
+# Internal port: mimo serve binds to 127.0.0.1 only, one less than the external port
+INNER_PORT=$((PORT - 1))
+
+# Start TCP proxy (background): listens on 0.0.0.0:$PORT, forwards to 127.0.0.1:$INNER_PORT
+python3 /usr/share/mimocode/webui/tcp_proxy.py \
+    --listen-port "${PORT}" \
+    --target-port "${INNER_PORT}" &
+
+# Store the proxy PID so the finish script can clean it up
+echo $! > /var/run/mimocode-proxy.pid
+
+# Start mimo serve (foreground, managed by s6) on 127.0.0.1:$INNER_PORT
+# (mimo serve defaults to binding 127.0.0.1, so the TCP proxy is the only external entry point)
+exec /usr/local/bin/mimo serve --port "${INNER_PORT}"

@@ -468,8 +468,10 @@ class MiMoCoordinator:
             return False
 
         except (ImportError, ModuleNotFoundError):
+            _LOGGER.warning("Addon detection: import failed (not on Supervised/OS?)")
             return False
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning("Addon detection error: %s", exc)
             return False
 
     async def _wait_for_server_ready(self, timeout: int) -> bool:

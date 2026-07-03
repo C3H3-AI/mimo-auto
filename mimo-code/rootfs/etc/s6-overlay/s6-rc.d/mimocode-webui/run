@@ -7,4 +7,7 @@ else
     MIMO_PORT=14096
 fi
 
-exec env MIMO_PORT="${MIMO_PORT}" /usr/bin/python3 /usr/share/mimocode/webui/server.py
+# The web UI talks to the inner (127.0.0.1) port that mimo serve listens on
+INNER_PORT=$((MIMO_PORT - 1))
+
+exec env MIMO_PORT="${INNER_PORT}" /usr/bin/python3 /usr/share/mimocode/webui/server.py

@@ -1,3 +1,15 @@
-#!/usr/bin/execlineb -S0
-# s6 will restart the service automatically on exit
-# This file exists to ensure s6 treats this as a longrun service
+#!/usr/bin/with-contenv bashio
+# ============================================================
+# Cleanup: kill the TCP proxy background process
+# The proxy PID was stored in /var/run/mimocode-proxy.pid by the run script.
+# ============================================================
+
+PID_FILE=/var/run/mimocode-proxy.pid
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        echo "[mimocode finish] Stopping TCP proxy (PID $PID)..."
+        kill "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+fi
