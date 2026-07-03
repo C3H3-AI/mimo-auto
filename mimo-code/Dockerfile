@@ -27,7 +27,7 @@ COPY --from=builder \
 # Find the native ELF binary and symlink it to /usr/local/bin/mimo
 # The native binary lives at @mimo-ai/mimocode-{platform}/bin/mimo.
 # There is exactly one such binary (the builder only installs its own arch).
-RUN BIN=$(find /usr/local/lib/mimo -path '*/bin/mimo' -type f 2>/dev/null | head -1) && \
+RUN BIN=$(find /usr/local/lib/mimo -path '*/bin/mimo' -type f 2>/dev/null -quit) && \
     if [ -z "$BIN" ]; then \
         echo "ERROR: No native mimo binary found in /usr/local/lib/mimo"; \
         exit 1; \
