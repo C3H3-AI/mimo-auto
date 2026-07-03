@@ -258,13 +258,22 @@ class MiMoCoordinator:
             from homeassistant.components.hassio import get_addons_info
 
             addons = get_addons_info(self._hass)
+            _LOGGER.warning(
+                "ADDON_DBG: addons_type=%s keys=%s",
+                type(addons).__name__,
+                list(addons.keys()) if isinstance(addons, dict) else "N/A",
+            )
             if not isinstance(addons, dict):
                 return False
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 info = addons.get(slug)
-                if isinstance(info, dict) and info.get("state") == "started":
-                    return True
+                if isinstance(info, dict):
+                    _LOGGER.warning(
+                        "ADDON_DBG: slug=%s state=%s", slug, info.get("state", "?")
+                    )
+                    if info.get("state") == "started":
+                        return True
             return False
         except Exception:
             return False
@@ -454,16 +463,25 @@ class MiMoCoordinator:
             from homeassistant.components.hassio import get_addons_info
 
             addons = get_addons_info(self._hass)
+            _LOGGER.warning(
+                "ADDON_DBG: addons_type=%s keys=%s",
+                type(addons).__name__,
+                list(addons.keys()) if isinstance(addons, dict) else "N/A",
+            )
             if not isinstance(addons, dict):
                 return False
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
                 info = addons.get(slug)
-                if isinstance(info, dict) and info.get("state") == "started":
-                    _LOGGER.info(
-                        "Detected MiMo Code add-on '%s' is running", slug
+                if isinstance(info, dict):
+                    _LOGGER.warning(
+                        "ADDON_DBG: slug=%s state=%s", slug, info.get("state", "?")
                     )
-                    return True
+                    if info.get("state") == "started":
+                        _LOGGER.info(
+                            "Detected MiMo Code add-on '%s' is running", slug
+                        )
+                        return True
 
             return False
 
