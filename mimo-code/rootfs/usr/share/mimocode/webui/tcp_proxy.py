@@ -22,7 +22,7 @@ async def _relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
                 break
             writer.write(data)
             await writer.drain()
-    except (ConnectionResetError, BrokenPipeError, OSError):
+    except (ConnectionResetError, BrokenPipeError, OSError, asyncio.CancelledError):
         pass
 
 
@@ -43,6 +43,10 @@ async def handle_client(
     client_id: int,
 ) -> None:
     """Bidirectionally bridge one client connection to the target server."""
+    peername = client_writer.get_extra_info("peername", ("?", 0))
+    target_reader = None
+    target_writer = None
+
     # Connect to the target (inner) server
     try:
         target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
@@ -51,7 +55,6 @@ async def handle_client(
         await _close_writer(client_writer)
         return
 
-    peername = client_writer.get_extra_info("peername", ("?", 0))
     print(
         f"[TCP Proxy] #{client_id} Connected: "
         f"{peername[0]}:{peername[1]} \u2192 {target_host}:{target_port}"
@@ -63,11 +66,12 @@ async def handle_client(
             _relay(client_reader, target_writer),
             _relay(target_reader, client_writer),
         )
-    except (ConnectionResetError, BrokenPipeError, OSError):
+    except (ConnectionResetError, BrokenPipeError, OSError, asyncio.CancelledError):
         pass
     finally:
         await _close_writer(client_writer)
-        await _close_writer(target_writer)
+        if target_writer:
+            await _close_writer(target_writer)
         print(f"[TCP Proxy] #{client_id} Disconnected")
 
 
@@ -102,9 +106,12 @@ async def main() -> None:
     ) -> None:
         nonlocal client_counter
         client_counter += 1
-        await handle_client(
-            reader, writer, args.target_host, args.target_port, client_counter
-        )
+        try:
+            await handle_client(
+                reader, writer, args.target_host, args.target_port, client_counter
+            )
+        except asyncio.CancelledError:
+            pass
 
     server = await asyncio.start_server(
         on_connect,
