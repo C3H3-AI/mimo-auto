@@ -12,12 +12,13 @@ ingress_port: 8099
 panel_icon: mdi:chat-processing
 panel_title: MiMo Code
 ports:
+  14096/tcp: 14096
   8099/tcp: null
 ports_description:
+  14096/tcp: MiMo AI API
   8099/tcp: Web UI (handled by ingress)
 startup: application
 boot: auto
-host_network: true
 options:
   port: 14096
 schema:
