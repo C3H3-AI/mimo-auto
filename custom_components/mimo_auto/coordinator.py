@@ -255,16 +255,16 @@ class MiMoCoordinator:
     async def _check_addon_healthy(self) -> bool:
         """Check addon health via Supervisor API as fallback."""
         try:
-            from homeassistant.components.hassio import async_get_addon_info
+            from homeassistant.components.hassio import get_addons_info
+
+            addons = await get_addons_info(self._hass)
+            if not isinstance(addons, dict):
+                return False
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
-                try:
-                    result = await async_get_addon_info(self._hass, slug)
-                    data = result.get("data", {}) if isinstance(result, dict) else result
-                    if isinstance(data, dict) and data.get("state") == "started":
-                        return True
-                except Exception:
-                    continue
+                info = addons.get(slug)
+                if isinstance(info, dict) and info.get("state") == "started":
+                    return True
             return False
         except Exception:
             return False
@@ -451,29 +451,19 @@ class MiMoCoordinator:
         direct HTTP reachability to the server port.
         """
         try:
-            from homeassistant.components.hassio import async_get_addon_info
+            from homeassistant.components.hassio import get_addons_info
+
+            addons = await get_addons_info(self._hass)
+            if not isinstance(addons, dict):
+                return False
 
             for slug in (ADDON_SLUG, ADDON_SLUG_LOCAL):
-                try:
-                    result = await async_get_addon_info(self._hass, slug)
-                    _LOGGER.debug(
-                        "Addon check '%s': result=%s",
-                        slug, str(result)[:300] if result else "None",
+                info = addons.get(slug)
+                if isinstance(info, dict) and info.get("state") == "started":
+                    _LOGGER.info(
+                        "Detected MiMo Code add-on '%s' is running", slug
                     )
-                    # Result is the Supervisor API response
-                    data = result.get("data", {}) if isinstance(result, dict) else result
-                    if isinstance(data, dict):
-                        _LOGGER.debug(
-                            "Addon '%s' state=%s", slug, data.get("state", "?"),
-                        )
-                        if data.get("state") == "started":
-                            _LOGGER.info(
-                                "Detected MiMo Code add-on '%s' is running", slug
-                            )
-                            return True
-                except Exception as exc:
-                    _LOGGER.debug("Addon check '%s' failed: %s", slug, exc)
-                    continue
+                    return True
 
             return False
 
