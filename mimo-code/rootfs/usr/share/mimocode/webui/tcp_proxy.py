@@ -112,6 +112,8 @@ async def main() -> None:
             )
         except asyncio.CancelledError:
             pass
+        except Exception:
+            pass  # Suppress other exceptions during shutdown
 
     server = await asyncio.start_server(
         on_connect,

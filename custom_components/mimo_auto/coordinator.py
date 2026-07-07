@@ -108,14 +108,6 @@ class MiMoCoordinator:
                 return True
 
             # Step 2: No existing server found, try to start one as subprocess
-                _LOGGER.info(
-                    "Connected to existing MiMo server at %s",
-                    self._server_url,
-                )
-                self._mark_running()
-                return True
-
-            # Step 2: No existing server found, try to start one as subprocess
             mimo_path = await self._resolve_mimo_binary()
             if mimo_path is None:
                 if self._auto_install:

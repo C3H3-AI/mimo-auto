@@ -1,7 +1,7 @@
 name: MiMo Code
-version: 3.0.0
+version: 3.2.0
 slug: mimo-code
-description: MiMo Code AI Server
+description: MiMo Code AI Server with enhanced Web UI and builtin skills
 url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64

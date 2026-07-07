@@ -4,10 +4,10 @@
 
 ## 功能特点
 
-- **侧边栏 Web UI** — HA 侧边栏直接打开 MiMo Code 聊天界面（模型选择、命令面板、主题切换、提供商管理）
+- **侧边栏 Web UI** — 现代化聊天界面，支持流式输出、思考过程显示、文件浏览器
 - **HA 对话助手** — 在 HA 语音助手中使用 MiMo Auto 模型
-- **Claw Assistant 兼容** — 注册为 conversation 实体，可被 Claw Assistant 路由
-- **多模式支持** — Plan/Agent/Build 三种交互模式
+- **Claw Assistant 兼容** — 会话复用，支持上下文保持
+- **多模式支持** — Plan/Agent/Build 三种交互模式切换
 - **自动化服务** — 通过 `mimo_auto.chat` 服务在自动化中调用 AI
 
 ## 架构
@@ -103,12 +103,13 @@ mimo serve --port 14096
 
 安装 MiMo Code Add-on 后，HA 侧边栏出现 **MiMo Code** 图标。支持：
 
-- **聊天对话** — 流式对话，历史会话管理
-- **模型选择** — 切换不同 AI 模型
+- **聊天对话** — 流式输出，思考过程折叠显示，消息时间统计
+- **Agent 切换** — Build/Plan/Compose 模式选择器
+- **文件浏览器** — 右侧边栏，浏览项目文件
 - **命令面板** — Ctrl+K 打开，搜索/执行命令
-- **代理模式** — Plan/Agent/Build 切换
-- **主题切换** — Default/Light/Dracula/Solarized
+- **主题切换** — 深色/浅色/系统跟随
 - **设置面板** — 提供商、技能、统计信息
+- **移动端适配** — 响应式布局，侧边栏点击遮罩关闭
 
 ### HA 对话助手
 
@@ -122,7 +123,13 @@ mimo serve --port 14096
 
 ### Claw Assistant
 
-MiMo Auto 会自动注册 `conversation.mimo_auto` 实体，Claw Assistant 配置中可直接选择。
+MiMo Auto 会自动注册 `conversation.mimo_auto` 实体，支持会话复用。
+
+在 Claw Assistant 设置中：
+- **Primary Agent**: 选择 `conversation.mimo_auto`
+- **Secondary Fallback Agent**: 选择 `conversation.mimo_auto`
+
+会话上下文会在同一 conversation_id 的多次对话中保持。
 
 ### 自动化调用
 
@@ -172,15 +179,28 @@ HA 对话 → mimo_auto 组件 → HTTP → addon tcp_proxy → mimo serve → M
 mimo-auto/
 ├── custom_components/mimo_auto/     ← HA 自定义组件
 │   ├── __init__.py                  组件入口
-│   ├── agent_impl.py               对话代理核心
+│   ├── agent_impl.py               对话代理（会话复用）
 │   ├── coordinator.py              服务检测 + Add-on 通道
 │   ├── conversation.py             对话实体 (Claw 兼容)
+│   ├── entity.py                   ConversationEntity 注册
 │   ├── config_flow.py              UI 配置流程
 │   ├── const.py                    常量
 │   ├── mimo_proxy.py               API 代理
 │   ├── manifest.json               组件声明
-│   ├── services.yaml               服务定义
-│   └── www/index.html              旧版 Web UI（保留）
+│   └── services.yaml               服务定义
+├── webui/                           ← Web UI (Vite + React)
+│   ├── src/
+│   │   ├── components/             12 个 React 组件
+│   │   ├── store/                  Zustand 状态管理
+│   │   ├── api/                    API 客户端
+│   │   ├── hooks/                  自定义 Hooks
+│   │   ├── theme/                  主题配置
+│   │   ├── types/                  TypeScript 类型
+│   │   ├── App.tsx                 应用入口
+│   │   ├── main.tsx                React 入口
+│   │   └── index.css               全局样式
+│   ├── dist/                       构建产物
+│   └── package.json
 ├── mimo-code/                       ← Add-on 包
 │   ├── config.yaml                 Add-on 配置
 │   ├── Dockerfile                  多阶段构建
@@ -190,14 +210,33 @@ mimo-auto/
 │       │   ├── mimocode/           mimo serve 服务
 │       │   └── mimocode-webui/     Web UI 服务
 │       └── usr/share/mimocode/webui/
-│           ├── index.html          完整 Web UI (SPA)
+│           ├── dist/               Vite 构建产物（部署目标）
 │           ├── server.py           HTTP 代理服务器
-│           └── tcp_proxy.py        TCP 端口转发代理 ★
+│           └── tcp_proxy.py        TCP 端口转发代理
 ├── hacs.json                        HACS 配置
 └── README.md                        本文件
 ```
 
 ## 更新日志
+
+### v3.2.0
+
+- **Claw 会话复用** — 使用 conversation_id 复用 mimo serve 会话，保持上下文
+- **Agent 模式选择器** — 输入框上方显示当前 Agent，支持切换
+- **消息重新生成** — 助手消息显示重新生成按钮
+- **消息时间显示** — 显示创建时间和响应耗时
+- **文件浏览器** — 使用 mimo serve 原生 /file API
+- **移动端优化** — 侧边栏默认隐藏，点击遮罩关闭
+- **流式阶段指示** — 显示 Sending/Thinking/Processing 状态
+
+### v3.1.0
+
+- **全新 Web UI** — React + Vite + MUI 现代化界面
+- **完整 Markdown 渲染** — 代码块复制、语法高亮
+- **思考过程显示** — 可折叠的 reasoning 区域
+- **Token 统计** — 显示总 token 和推理 token
+- **4 种主题** — 深色、浅色、德古拉、北欧
+- **键盘快捷键** — Ctrl+K/N/E/B/Shift+C
 
 ### v3.0.0
 
@@ -214,8 +253,15 @@ mimo-auto/
 - 流式消息处理
 - 崩溃自动恢复
 
-### v2.0.0
+## 键盘快捷键
 
-- MiMo Chat 侧边栏面板
-- 对话代理 (HA Conversation Agent)
-- 自动化服务
+| 快捷键 | 功能 |
+|--------|------|
+| Ctrl+K | 命令面板 |
+| Ctrl+N | 新建会话 |
+| Ctrl+E | 文件浏览器 |
+| Ctrl+B | 切换侧边栏 |
+| Ctrl+Shift+C | 设置面板 |
+| Escape | 关闭弹窗 |
+| Enter | 发送消息 |
+| Shift+Enter | 换行 |

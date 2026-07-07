@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.conversation import ConversationEntity, ConversationInput, ConversationResult
+from homeassistant.components.conversation import (
+    ConversationEntity,
+    ConversationEntityFeature,
+    ConversationInput,
+    ConversationResult,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
@@ -39,6 +44,7 @@ class MiMoConversationEntity(ConversationEntity):
     """Conversation entity for MiMo Auto."""
 
     _attr_has_entity_name = True
+    _attr_supported_features = ConversationEntityFeature.CONTROL
 
     def __init__(
         self,
@@ -67,4 +73,4 @@ class MiMoConversationEntity(ConversationEntity):
         await super().async_added_to_hass()
         from homeassistant.components import conversation as ha_conversation
         ha_conversation.async_set_agent(self.hass, self._config_entry, self)
-        _LOGGER.info("MiMo Auto conversation agent registered for claw_assistant")
+        _LOGGER.info("MiMo Auto conversation agent registered")
