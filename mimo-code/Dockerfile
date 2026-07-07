@@ -4,7 +4,6 @@
 # Docker Buildx + QEMU emulates the target arch, so npm will install
 # the correct platform variant of @mimo-ai/mimocode-{arch}[-musl].
 # ============================================================
-ARG BUILD_FROM
 ARG NODE_VERSION="22"
 FROM node:${NODE_VERSION}-alpine AS builder
 
@@ -12,11 +11,8 @@ RUN npm install -g @mimo-ai/cli@0.1.5
 
 # ============================================================
 # Stage 2: Runtime — HA base image, only the native ELF binary
-# The @mimo-ai/cli bin/mimo is a Node.js wrapper; we skip it and
-# link directly to the platform-specific native binary instead.
-# No Node.js needed at runtime.
 # ============================================================
-FROM ${BUILD_FROM}
+FROM ghcr.io/home-assistant/base:latest
 
 # Copy platform-specific native binary directories only
 # (e.g. mimocode-linux-x64, mimocode-linux-arm64-musl)
