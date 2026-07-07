@@ -1,8 +1,0 @@
-{
-  "mcp": {
-    "ha": {
-      "command": "python3",
-      "args": ["/usr/share/mimocode/webui/ha_mcp_server.py"]
-    }
-  }
-}
