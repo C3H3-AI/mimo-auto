@@ -38,7 +38,7 @@ from .coordinator import MiMoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CONVERSATION]
+PLATFORMS: list[Platform] = [Platform.CONVERSATION, Platform.SENSOR]
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -134,11 +134,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .mimo_proxy import async_register_proxy_views
     async_register_proxy_views(hass)
 
-    # Register conversation agent (for HA conversation UI)
-    from homeassistant.components import conversation as ha_conversation
-    ha_conversation.async_set_agent(hass, entry, agent_impl)
-
     # Forward setup to platforms (conversation entity for claw_assistant)
+    # Note: conversation.py handles agent registration via async_added_to_hass()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register update listener for config entry changes

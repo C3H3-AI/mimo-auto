@@ -53,3 +53,63 @@ ERROR_INVALID_RESPONSE = "Received an invalid response from MiMo Auto server."
 
 # Service names
 SERVICE_CHAT = "chat"
+
+# ==================== Intent Routing ====================
+
+# Intent types for routing to appropriate backend
+INTENT_DEVICE_CONTROL = "device_control"
+INTENT_SYSTEM_OPERATION = "system_operation"
+INTENT_QUERY = "query"
+INTENT_GENERAL = "general"
+
+# Device control patterns (Chinese + English)
+DEVICE_CONTROL_PATTERNS = {
+    "light": ["灯", "灯光", "开灯", "关灯", "light", "lamp"],
+    "switch": ["开关", "打开", "关闭", "switch", "turn on", "turn off"],
+    "climate": ["空调", "温度", "climate", "temperature", "heat", "cool"],
+    "cover": ["窗帘", "卷帘", "百叶窗", "cover", "blind", "curtain"],
+    "lock": ["门锁", "锁", "lock", "unlock"],
+    "fan": ["风扇", "换气", "fan"],
+    "vacuum": ["扫地机", "吸尘器", "vacuum", "clean"],
+    "media_player": ["电视", "音箱", "播放器", "media", "player", "tv"],
+    "automation": ["自动化", "自动化", "automation", "trigger"],
+    "scene": ["场景", "scene"],
+    "script": ["脚本", "script"],
+}
+
+# System operation patterns
+SYSTEM_OPERATION_PATTERNS = {
+    "restart": ["重启", "restart", "reboot"],
+    "update": ["更新", "升级", "update", "upgrade"],
+    "backup": ["备份", "backup"],
+    "restore": ["恢复", "restore"],
+    "logs": ["日志", "log"],
+    "status": ["状态", "status", "health"],
+}
+
+# ==================== MCP Configuration ====================
+
+# MCP tool categories
+MCP_CATEGORIES = [
+    "light", "switch", "climate", "cover", "lock", "fan",
+    "vacuum", "media_player", "automation", "scene", "script",
+    "sensor", "binary_sensor", "input_boolean", "input_number",
+    "input_select", "input_text", "input_datetime",
+]
+
+# ==================== SSH Configuration ====================
+
+# SSH connection defaults
+CONF_SSH_HOST = "ssh_host"
+CONF_SSH_PORT = "ssh_port"
+CONF_SSH_USERNAME = "ssh_username"
+CONF_SSH_KEY_PATH = "ssh_key_path"
+
+DEFAULT_SSH_PORT = 22
+DEFAULT_SSH_USERNAME = "root"
+
+# ==================== Supervisor Configuration ====================
+
+# Supervisor API configuration
+CONF_SUPERVISOR_TOKEN = "supervisor_token"
+SUPERVISOR_API_TIMEOUT = 10

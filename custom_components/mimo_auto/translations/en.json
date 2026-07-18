@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MiMo Auto Setup",
+        "description": "Configure MiMo Auto integration.",
+        "data": {
+          "port": "MiMo Server Port",
+          "mimo_bin_path": "MiMo Binary Path (optional)",
+          "auto_install": "Auto-install MiMo CLI"
+        }
+      },
+      "feishu": {
+        "title": "Feishu Configuration",
+        "description": "Configure Feishu channel (optional).",
+        "data": {
+          "enabled": "Enable Feishu",
+          "app_id": "Feishu App ID",
+          "app_secret": "Feishu App Secret"
+        }
+      },
+      "wechat": {
+        "title": "WeChat Work Configuration",
+        "description": "Configure WeChat Work channel (optional).",
+        "data": {
+          "enabled": "Enable WeChat Work",
+          "corp_id": "Corp ID",
+          "agent_id": "Agent ID",
+          "secret": "App Secret",
+          "token": "Verification Token",
+          "encoding_aes_key": "Encoding AES Key"
+        }
+      },
+      "personal_wechat": {
+        "title": "Personal WeChat Configuration",
+        "description": "Configure Personal WeChat channel (optional). After enabling, scan QR code in MiMo WebUI to login.",
+        "data": {
+          "enabled": "Enable Personal WeChat"
+        }
+      }
+    },
+    "error": {
+      "invalid_port": "Invalid port number",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "MiMo Auto is already configured"
+    }
+  }
+}

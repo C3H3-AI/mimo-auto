@@ -1,7 +1,8 @@
 name: MiMo Code
 version: 3.2.0
 slug: mimo-code
-description: MiMo Code AI Server with enhanced Web UI and builtin skills
+description: >-
+  MiMo Code AI 服务器，支持多通道通信（飞书、企业微信、个人微信）
 url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64
@@ -16,10 +17,33 @@ ports:
   8099/tcp: null
 ports_description:
   14096/tcp: MiMo AI API
-  8099/tcp: Web UI (handled by ingress)
+  8099/tcp: Web UI (通过 ingress 访问)
 startup: application
 boot: auto
+watchdog: http://[HOST]:[PORT:8099]/healthcheck
+map:
+  - config:rw
 options:
   port: 14096
+  feishu_enabled: false
+  feishu_app_id: ""
+  feishu_app_secret: ""
+  wechat_enabled: false
+  wechat_corp_id: ""
+  wechat_agent_id: ""
+  wechat_secret: ""
+  wechat_token: ""
+  wechat_encoding_aes_key: ""
+  personal_wechat_enabled: false
 schema:
   port: int(1024,65535)
+  feishu_enabled: bool
+  feishu_app_id: str
+  feishu_app_secret: str
+  wechat_enabled: bool
+  wechat_corp_id: str
+  wechat_agent_id: str
+  wechat_secret: str
+  wechat_token: str
+  wechat_encoding_aes_key: str
+  personal_wechat_enabled: bool

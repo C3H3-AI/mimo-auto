@@ -1,0 +1,19 @@
+{
+  "channels": {
+    "feishu": {
+      "app_id": "",
+      "app_secret": "",
+      "enabled": false,
+      "verification_token": "",
+      "encrypt_key": ""
+    },
+    "wechat": {
+      "corp_id": "",
+      "agent_id": "",
+      "secret": "",
+      "token": "",
+      "encoding_aes_key": "",
+      "enabled": false
+    }
+  }
+}

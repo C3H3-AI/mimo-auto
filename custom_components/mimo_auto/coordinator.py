@@ -26,6 +26,9 @@ from .const import (
     SERVER_START_TIMEOUT_SECONDS,
     SERVER_STOP_TIMEOUT_SECONDS,
 )
+from .mcp_client import MCPClient
+from .ssh_client import SSHClient
+from .supervisor_client import SupervisorClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,9 +46,10 @@ class MiMoCoordinator:
 
         Args:
             hass: The HomeAssistant instance.
-            config: Configuration dictionary containing port and binary path.
+            config: Configuration dictionary containing port, binary path, and channels.
         """
         self._hass = hass
+        self._config = config  # Store full config including channels
         self._port: int = config.get(CONF_PORT, DEFAULT_PORT)
         self._mimo_bin: str = config.get(CONF_MIMO_BIN, DEFAULT_MIMO_BIN)
         self._auto_install: bool = config.get(CONF_AUTO_INSTALL, DEFAULT_AUTO_INSTALL)
@@ -55,6 +59,31 @@ class MiMoCoordinator:
         self._external_mode: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
         self._server_url: str = f"http://127.0.0.1:{self._port}"
+
+        # Connection clients for three-tier architecture
+        self._mcp_client: MCPClient | None = None
+        self._ssh_client: SSHClient | None = None
+        self._supervisor_client: SupervisorClient | None = None
+
+    @property
+    def channels_config(self) -> dict[str, Any]:
+        """Get channel configuration."""
+        return self._config.get("channels", {})
+
+    @property
+    def mcp_client(self) -> MCPClient | None:
+        """Get the MCP client."""
+        return self._mcp_client
+
+    @property
+    def ssh_client(self) -> SSHClient | None:
+        """Get the SSH client."""
+        return self._ssh_client
+
+    @property
+    def supervisor_client(self) -> SupervisorClient | None:
+        """Get the Supervisor client."""
+        return self._supervisor_client
 
     @property
     def is_running(self) -> bool:
@@ -169,7 +198,58 @@ class MiMoCoordinator:
             asyncio.create_task(self._read_stream(self._process.stdout, "stdout"))
             asyncio.create_task(self._read_stream(self._process.stderr, "stderr"))
 
+            # Initialize connection clients
+            await self._init_clients()
+
             return True
+
+    async def _init_clients(self) -> None:
+        """Initialize MCP, SSH, and Supervisor clients.
+
+        Called after the server starts successfully. Clients are initialized
+        based on available configuration.
+        """
+        # Initialize MCP client
+        mcp_url = self._config.get("mcp_url")
+        if mcp_url:
+            self._mcp_client = MCPClient(self._hass, url=mcp_url)
+            _LOGGER.info("MCP client initialized with URL: %s", mcp_url)
+        else:
+            _LOGGER.debug("No MCP URL configured, MCP client not initialized")
+
+        # Initialize SSH client
+        ssh_host = self._config.get("ssh_host")
+        if ssh_host:
+            self._ssh_client = SSHClient(
+                self._hass,
+                host=ssh_host,
+                port=self._config.get("ssh_port", 22),
+                username=self._config.get("ssh_username", "root"),
+                key_path=self._config.get("ssh_key_path"),
+            )
+            _LOGGER.info("SSH client initialized for host: %s", ssh_host)
+        else:
+            _LOGGER.debug("No SSH host configured, SSH client not initialized")
+
+        # Initialize Supervisor client
+        supervisor_token = self._config.get("supervisor_token")
+        if supervisor_token:
+            self._supervisor_client = SupervisorClient(
+                self._hass,
+                token=supervisor_token,
+            )
+            _LOGGER.info("Supervisor client initialized")
+        else:
+            _LOGGER.debug("No Supervisor token configured, client not initialized")
+
+    async def close_clients(self) -> None:
+        """Close all connection clients."""
+        if self._mcp_client:
+            await self._mcp_client.close()
+        if self._ssh_client:
+            pass  # SSH client doesn't need explicit close
+        if self._supervisor_client:
+            await self._supervisor_client.close()
 
     def _mark_running(self) -> None:
         """Mark coordinator as 'running' when connected to an external server.
@@ -197,6 +277,9 @@ class MiMoCoordinator:
             if not self.is_running:
                 _LOGGER.debug("MiMo server is not running, nothing to stop")
                 return True
+
+            # Close connection clients
+            await self.close_clients()
 
             return await self._stop_process()
 
@@ -302,22 +385,36 @@ class MiMoCoordinator:
         if mimo_path:
             return mimo_path
 
-        # On Windows, check common locations
-        if self._hass.config.config_dir and self._hass.config.config_dir.startswith(
-            ("C:", "D:")
-        ):
-            common_paths = [
-                r"C:\Users\duola\.workbuddy\binaries\node\versions\22.22.2\mimo.cmd",
-                r"C:\Users\duola\.workbuddy\binaries\node\versions\22.22.2\mimo",
-                r"C:\Users\duola\AppData\Roaming\npm\mimo.cmd",
-                r"C:\Users\duola\AppData\Roaming\npm\mimo",
-            ]
-            for path in common_paths:
-                exists = await self._hass.async_add_executor_job(
-                    _check_file_exists, path
-                )
-                if exists:
-                    return path
+        # On Windows, check common locations using environment variables
+        import sys
+        if sys.platform == "win32":
+            import os
+            appdata = os.environ.get("APPDATA", "")
+            if appdata:
+                common_paths = [
+                    os.path.join(appdata, "npm", "mimo.cmd"),
+                    os.path.join(appdata, "npm", "mimo"),
+                ]
+                # Also check user home directory for workbuddy installations
+                home = os.path.expanduser("~")
+                if home:
+                    # Check common Node.js versions in workbuddy
+                    workbuddy_base = os.path.join(home, ".workbuddy", "binaries", "node", "versions")
+                    if os.path.isdir(workbuddy_base):
+                        for version_dir in os.listdir(workbuddy_base):
+                            mimo_path = os.path.join(workbuddy_base, version_dir, "mimo.cmd")
+                            mimo_path_unx = os.path.join(workbuddy_base, version_dir, "mimo")
+                            if os.path.isfile(mimo_path):
+                                common_paths.insert(0, mimo_path)
+                            if os.path.isfile(mimo_path_unx):
+                                common_paths.insert(0, mimo_path_unx)
+
+                for path in common_paths:
+                    exists = await self._hass.async_add_executor_job(
+                        _check_file_exists, path
+                    )
+                    if exists:
+                        return path
 
         return None
 
@@ -391,10 +488,8 @@ class MiMoCoordinator:
                     return True
 
                 # Send termination signal
-                if self._hass.config.config_dir and self._hass.config.config_dir.startswith(
-                    ("C:", "D:")
-                ):
-                    # Windows
+                import sys
+                if sys.platform == "win32":
                     self._process.send_signal(signal.CTRL_BREAK_EVENT)
                 else:
                     self._process.terminate()

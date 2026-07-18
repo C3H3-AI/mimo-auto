@@ -7,7 +7,7 @@
 ARG NODE_VERSION="22"
 FROM node:${NODE_VERSION}-alpine AS builder
 
-RUN npm install -g @mimo-ai/cli@0.1.5
+RUN npm install -g @mimo-ai/cli@0.1.6
 
 # ============================================================
 # Stage 2: Runtime — HA base image, only the native ELF binary

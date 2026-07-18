@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.0.0 (2026-07-17)
+
+### ✨ 新功能
+
+- **三层混合架构** — MCP 作为主要设备控制层（83工具），REST API 作为备用，SSH/Supervisor 处理系统运维
+- **MCP 客户端** — 新增 `mcp_client.py`，支持连接外部 HA MCP Addon
+- **SSH 客户端** — 新增 `ssh_client.py`，支持系统级操作（更新、备份、主机管理）
+- **Supervisor 客户端** — 新增 `supervisor_client.py`，支持 Addon 管理和系统操作
+- **状态传感器** — 新增 `sensor.py`，暴露服务器状态、MCP/SSH/Supervisor 连接状态
+- **MiMo Code 升级** — 更新到 `@mimo-ai/cli@0.1.6`
+
+### 🔧 优化
+
+- **代码清理** — 删除 ~375 行死代码，agent_impl.py 从 1152 行降至 777 行
+- **删除 entity.py** — 移除从未使用的死代码文件
+- **修复硬编码路径** — 用 `%APPDATA%` 动态路径替代硬编码的 `C:\Users\duola\...`
+- **修复 OS 检测** — 用 `sys.platform` 替代 `config_dir.startswith(("C:", "D:"))`
+- **修复双重注册** — 删除冗余的 `async_set_agent()` 调用
+
+### 📦 其他
+
+- 架构文档更新
+- 新增 MCP/SSH/Supervisor 配置选项
+
 ## v2.1.1 (2026-07-03)
 
 ### 🔧 修复

@@ -24,10 +24,12 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import SettingsBrightnessIcon from "@mui/icons-material/SettingsBrightness";
+import ChatIcon from "@mui/icons-material/Chat";
 import { useUiStore } from "../store/uiStore";
 import { useConfigStore } from "../store/configStore";
 import { useSessionStore } from "../store/sessionStore";
 import { MimoClient } from "../api/mimoClient";
+import { ChannelSettings } from "./ChannelSettings";
 
 function SettingsTab({
   label,
@@ -116,9 +118,9 @@ export function SettingsPanel() {
   };
 
   const themeOptions = [
-    { value: "light", label: "Light", icon: <LightModeIcon fontSize="small" /> },
-    { value: "dark", label: "Dark", icon: <DarkModeIcon fontSize="small" /> },
-    { value: "system", label: "System", icon: <SettingsBrightnessIcon fontSize="small" /> },
+    { value: "light", label: "亮色", icon: <LightModeIcon fontSize="small" /> },
+    { value: "dark", label: "暗色", icon: <DarkModeIcon fontSize="small" /> },
+    { value: "system", label: "跟随系统", icon: <SettingsBrightnessIcon fontSize="small" /> },
   ];
 
   return (
@@ -130,7 +132,7 @@ export function SettingsPanel() {
     >
       {/* Header */}
       <Box className="flex items-center justify-between p-4">
-        <Typography variant="h6" fontWeight={600}>Settings</Typography>
+        <Typography variant="h6" fontWeight={600}>设置</Typography>
         <IconButton onClick={() => setSettingsOpen(false)} size="small">
           <CloseIcon />
         </IconButton>
@@ -139,10 +141,11 @@ export function SettingsPanel() {
 
       {/* Tabs */}
       <Box className="px-4 pt-3 pb-1 flex gap-1 flex-wrap">
-        <SettingsTab label="General" icon={<PsychologyIcon fontSize="small" />} active={tab === 0} onClick={() => setTab(0)} />
-        <SettingsTab label="Providers" icon={<CloudIcon fontSize="small" />} active={tab === 1} onClick={() => setTab(1)} />
-        <SettingsTab label="Skills" icon={<ExtensionIcon fontSize="small" />} active={tab === 2} onClick={() => setTab(2)} />
-        <SettingsTab label="Commands" icon={<TerminalIcon fontSize="small" />} active={tab === 3} onClick={() => setTab(3)} />
+        <SettingsTab label="通用" icon={<PsychologyIcon fontSize="small" />} active={tab === 0} onClick={() => setTab(0)} />
+        <SettingsTab label="提供商" icon={<CloudIcon fontSize="small" />} active={tab === 1} onClick={() => setTab(1)} />
+        <SettingsTab label="通道" icon={<ChatIcon fontSize="small" />} active={tab === 2} onClick={() => setTab(2)} />
+        <SettingsTab label="技能" icon={<ExtensionIcon fontSize="small" />} active={tab === 3} onClick={() => setTab(3)} />
+        <SettingsTab label="命令" icon={<TerminalIcon fontSize="small" />} active={tab === 4} onClick={() => setTab(4)} />
       </Box>
       <Divider />
 
@@ -152,7 +155,7 @@ export function SettingsPanel() {
             {/* Theme */}
             <Box>
               <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-                Theme
+                主题
               </Typography>
               <Box className="flex gap-2">
                 {themeOptions.map((opt) => (
@@ -175,18 +178,18 @@ export function SettingsPanel() {
             {/* Model Selection */}
             <Box>
               <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-                AI Model
+                AI 模型
               </Typography>
               <FormControl fullWidth size="small">
-                <InputLabel>Model</InputLabel>
+                <InputLabel>模型</InputLabel>
                 <Select
                   value={selectedModel}
-                  label="Model"
+                  label="模型"
                   onChange={(e) => handleModelChange(e.target.value)}
                   disabled={saving || allModels.length === 0}
                 >
                   {allModels.length === 0 ? (
-                    <MenuItem value="">Loading models...</MenuItem>
+                    <MenuItem value="">加载模型中...</MenuItem>
                   ) : (
                     allModels.map((m) => (
                       <MenuItem key={m.value} value={m.value}>
@@ -208,14 +211,14 @@ export function SettingsPanel() {
             {/* Info */}
             <Box>
               <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-                Status
+                状态
               </Typography>
               <Box className="space-y-1">
                 <Typography variant="body2" color="text.secondary">
-                  Active sessions: {useSessionStore.getState?.()?.sessions?.length || 0}
+                  活跃会话: {useSessionStore.getState?.()?.sessions?.length || 0}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Connected providers: {connectedSet.size}
+                  已连接提供商: {connectedSet.size}
                 </Typography>
               </Box>
             </Box>
@@ -225,14 +228,14 @@ export function SettingsPanel() {
         {tab === 1 && (
           <Box className="p-4">
             <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-              AI Providers ({providers?.all?.length || 0})
+              AI 提供商 ({providers?.all?.length || 0})
             </Typography>
             {!providers ? (
               <Box className="flex justify-center py-4">
                 <CircularProgress size={24} />
               </Box>
             ) : providers.all.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">No providers available</Typography>
+              <Typography variant="body2" color="text.secondary">暂无可用提供商</Typography>
             ) : (
               <List dense disablePadding>
                 {providers.all.map((p) => {
@@ -244,7 +247,7 @@ export function SettingsPanel() {
                         primaryTypographyProps={{ variant: "body2" }}
                       />
                       <Chip
-                        label={connected ? "Connected" : "Disconnected"}
+                        label={connected ? "已连接" : "未连接"}
                         size="small"
                         color={connected ? "success" : "default"}
                         variant="outlined"
@@ -257,22 +260,27 @@ export function SettingsPanel() {
           </Box>
         )}
 
-        {/* Skills Tab */}
+        {/* Channels Tab */}
         {tab === 2 && (
+          <ChannelSettings />
+        )}
+
+        {/* Skills Tab */}
+        {tab === 3 && (
           <Box className="p-4">
             <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-              Skills ({skills.length})
+              技能 ({skills.length})
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
-              Press Ctrl+K and type a skill name to use it. Skill install/delete is managed via the <code>mimo</code> CLI on the server.
+              按 Ctrl+K 然后输入技能名称来使用。技能安装/删除通过服务器上的 <code>mimo</code> CLI 管理。
             </Typography>
             {skills.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">No skills available</Typography>
+              <Typography variant="body2" color="text.secondary">暂无可用技能</Typography>
             ) : (
               <List dense disablePadding>
                 {skills.map((s, i) => (
                   <ListItem key={s.name || i} disableGutters sx={{ py: 0.5 }}>
-                    <ListItemText primary={s.name} secondary={s.description || "No description"} primaryTypographyProps={{ variant: "body2", fontWeight: 500 }} secondaryTypographyProps={{ variant: "caption" }} />
+                    <ListItemText primary={s.name} secondary={s.description || "暂无描述"} primaryTypographyProps={{ variant: "body2", fontWeight: 500 }} secondaryTypographyProps={{ variant: "caption" }} />
                   </ListItem>
                 ))}
               </List>
@@ -281,21 +289,21 @@ export function SettingsPanel() {
         )}
 
         {/* Commands Tab */}
-        {tab === 3 && (
+        {tab === 4 && (
           <Box className="p-4">
             <Typography variant="subtitle2" gutterBottom fontWeight={600}>
-              Commands ({commands.length})
+              命令 ({commands.length})
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>
-              Type / in chat or press Ctrl+K to execute a command.
+              在聊天中输入 / 或按 Ctrl+K 执行命令。
             </Typography>
             {commands.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">No commands available</Typography>
+              <Typography variant="body2" color="text.secondary">暂无可用命令</Typography>
             ) : (
               <List dense disablePadding>
                 {commands.map((c, i) => (
                   <ListItem key={c.name || c.command || i} disableGutters sx={{ py: 0.5 }}>
-                    <ListItemText primary={`/${c.command || c.name}`} secondary={c.description || "No description"} primaryTypographyProps={{ variant: "body2", fontWeight: 500, fontFamily: "monospace" }} secondaryTypographyProps={{ variant: "caption" }} />
+                    <ListItemText primary={`/${c.command || c.name}`} secondary={c.description || "暂无描述"} primaryTypographyProps={{ variant: "body2", fontWeight: 500, fontFamily: "monospace" }} secondaryTypographyProps={{ variant: "caption" }} />
                   </ListItem>
                 ))}
               </List>

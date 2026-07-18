@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """MiMo Code Web UI - serves SPA and proxies all API calls to the mimo server."""
+import asyncio
 import http.server
 import json
 import os
@@ -15,6 +16,103 @@ WEBUI_DIR = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(WEBUI_DIR, "dist")
 PORT = int(os.environ.get("WEBUI_PORT", "8099"))
 MIMO_WORKDIR = os.environ.get("MIMO_WORKDIR", "/data/mimocode")
+CONFIG_FILE = os.environ.get("MIMO_CONFIG", os.path.join(WEBUI_DIR, "mimo.json"))
+
+
+def _build_config_from_env():
+    """Build channel config from addon environment variables."""
+    config = {"channels": {}}
+
+    # Feishu
+    feishu_enabled = os.environ.get("FEISHU_ENABLED", "false").lower() == "true"
+    if feishu_enabled:
+        config["channels"]["feishu"] = {
+            "enabled": True,
+            "app_id": os.environ.get("FEISHU_APP_ID", ""),
+            "app_secret": os.environ.get("FEISHU_APP_SECRET", ""),
+        }
+
+    # WeChat Work
+    wechat_enabled = os.environ.get("WECHAT_ENABLED", "false").lower() == "true"
+    if wechat_enabled:
+        config["channels"]["wechat"] = {
+            "enabled": True,
+            "corp_id": os.environ.get("WECHAT_CORP_ID", ""),
+            "agent_id": os.environ.get("WECHAT_AGENT_ID", ""),
+            "secret": os.environ.get("WECHAT_SECRET", ""),
+            "token": os.environ.get("WECHAT_TOKEN", ""),
+            "encoding_aes_key": os.environ.get("WECHAT_ENCODING_AES_KEY", ""),
+        }
+
+    # Personal WeChat
+    personal_wechat_enabled = os.environ.get("PERSONAL_WECHAT_ENABLED", "false").lower() == "true"
+    if personal_wechat_enabled:
+        config["channels"]["personal_wechat"] = {
+            "enabled": True,
+        }
+
+    return config
+
+
+def _load_config():
+    """Load config from file, falling back to env vars."""
+    config = {}
+
+    # Try to load from file first
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        pass
+    except json.JSONDecodeError:
+        pass
+
+    # Merge with env vars (env vars take precedence)
+    env_config = _build_config_from_env()
+    if env_config.get("channels"):
+        if "channels" not in config:
+            config["channels"] = {}
+        config["channels"].update(env_config["channels"])
+
+    # Save merged config
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        sys.stderr.write(f"[MiMo WebUI] Failed to save config: {e}\n")
+
+    return config
+
+
+# Channel manager instance
+_channel_manager = None
+
+
+def _get_channel_manager():
+    """Get or create the channel manager instance."""
+    global _channel_manager
+    if _channel_manager is None:
+        try:
+            # Add current directory to path for imports
+            sys.path.insert(0, WEBUI_DIR)
+            from channel_manager import ChannelManager
+            config = _load_config()
+            _channel_manager = ChannelManager(
+                config=config,
+                mimo_serve_url=MIMO_API_BASE,
+            )
+        except ImportError as e:
+            sys.stderr.write(f"[MiMo WebUI] Channel manager not available: {e}\n")
+    return _channel_manager
+
+
+def _start_channels():
+    """Start channel manager in background."""
+    manager = _get_channel_manager()
+    if manager:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.create_task(manager.start())
 
 
 class ThreadingMiMoServer(ThreadingMixIn, http.server.HTTPServer):
@@ -43,6 +141,29 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            # Health check endpoint for Supervisor
+            if self.path == "/healthcheck" or self.path == "/":
+                # Check if mimo serve is running
+                try:
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{MIMO_PORT}/session",
+                        method="GET",
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        if resp.status == 200:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/plain")
+                            self.end_headers()
+                            self.wfile.write(b"OK")
+                            return
+                except Exception:
+                    pass
+
+                # If mimo serve not responding, still return 200 for WebUI
+                if self.path == "/":
+                    super().do_GET()
+                    return
+
             if self.path.startswith("/api/"):
                 self._proxy_request("GET")
             else:
@@ -67,7 +188,11 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path.startswith("/api/"):
+            if self.path.startswith("/api/wechat/login"):
+                self._handle_wechat_login()
+            elif self.path.startswith("/api/wechat/login/status"):
+                self._handle_wechat_login_status()
+            elif self.path.startswith("/api/"):
                 self._proxy_request("POST")
             else:
                 self.send_error(405)
@@ -251,7 +376,152 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.write(f"[MiMo WebUI] {self.client_address[0]} - {format % args}\n")
 
 
+# Login state storage
+_login_states = {}
+
+
+def _handle_wechat_login(self):
+    """Handle WeChat login request - start QR code login flow."""
+    try:
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        data = json.loads(body) if body else {}
+
+        # Import and use personal WeChat client
+        sys.path.insert(0, WEBUI_DIR)
+        from wechat_personal import PersonalWeChatClient
+
+        # Create client and start login
+        async def do_login():
+            client = PersonalWeChatClient(
+                on_message=lambda msg: asyncio.sleep(0),  # Dummy handler
+            )
+            login_session = await client.start_login()
+            return login_session
+
+        # Run async login
+        loop = asyncio.new_event_loop()
+        try:
+            login_session = loop.run_until_complete(do_login())
+        finally:
+            loop.close()
+
+        # Store login state
+        session_key = login_session.session_key
+        _login_states[session_key] = {
+            "qrcode": login_session.qrcode,
+            "qrcode_url": login_session.qrcode_url,
+            "status": "waiting",
+            "client": None,
+        }
+
+        # Return QR code to frontend
+        response = json.dumps({
+            "session_key": session_key,
+            "qrcode": login_session.qrcode,
+            "qrcode_url": login_session.qrcode_url,
+        })
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response.encode())
+
+    except Exception as e:
+        sys.stderr.write(f"[MiMo WebUI] WeChat login error: {e}\n")
+        response = json.dumps({"error": str(e)})
+        self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response.encode())
+
+
+def _handle_wechat_login_status(self):
+    """Handle WeChat login status check."""
+    try:
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        data = json.loads(body) if body else {}
+
+        session_key = data.get("session_key", "")
+        if not session_key or session_key not in _login_states:
+            response = json.dumps({"status": "error", "message": "Invalid session"})
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response.encode())
+            return
+
+        login_state = _login_states[session_key]
+
+        # Check login status
+        async def check_status():
+            sys.path.insert(0, WEBUI_DIR)
+            from wechat_personal import PersonalWeChatClient
+
+            client = PersonalWeChatClient(
+                on_message=lambda msg: asyncio.sleep(0),
+            )
+            result = await client.wait_login(
+                type("LoginSession", (), {
+                    "session_key": session_key,
+                    "qrcode": login_state["qrcode"],
+                    "qrcode_url": login_state["qrcode_url"],
+                })(),
+                timeout_ms=5000,  # Short timeout for status check
+            )
+            return result
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(check_status())
+            if result.connected:
+                login_state["status"] = "success"
+                login_state["token"] = result.token
+                login_state["account_id"] = result.account_id
+                login_state["base_url"] = result.base_url
+                login_state["user_id"] = result.user_id
+        except TimeoutError:
+            login_state["status"] = "waiting"
+        except ValueError as e:
+            if "expired" in str(e).lower():
+                login_state["status"] = "expired"
+            else:
+                login_state["status"] = "error"
+                login_state["error"] = str(e)
+        finally:
+            loop.close()
+
+        response = json.dumps({
+            "status": login_state["status"],
+            "token": login_state.get("token"),
+            "account_id": login_state.get("account_id"),
+        })
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response.encode())
+
+    except Exception as e:
+        sys.stderr.write(f"[MiMo WebUI] WeChat status check error: {e}\n")
+        response = json.dumps({"status": "error", "message": str(e)})
+        self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response.encode())
+
+
 if __name__ == "__main__":
+    # Start channel manager in background thread
+    import threading
+    channel_thread = threading.Thread(target=_start_channels, daemon=True)
+    channel_thread.start()
+
     server = ThreadingMiMoServer(("0.0.0.0", PORT), MiMoProxyHandler)
     sys.stderr.write(f"[MiMo WebUI] Server listening on port {PORT} (mimo -> {MIMO_API_BASE})\n")
+    sys.stderr.write(f"[MiMo WebUI] Config file: {CONFIG_FILE}\n")
     server.serve_forever()
