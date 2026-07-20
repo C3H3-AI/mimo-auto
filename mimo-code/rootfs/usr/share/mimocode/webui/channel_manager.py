@@ -124,6 +124,9 @@ class ChannelManager:
 
         for name, client in self._channels.items():
             try:
+                if isinstance(client, dict):
+                    # pending login placeholder — nothing to stop
+                    continue
                 await client.stop()
                 _LOGGER.info("Stopped channel: %s", name)
             except Exception as err:
@@ -131,8 +134,33 @@ class ChannelManager:
 
         self._channels.clear()
 
+    async def reload(self, config: dict[str, Any]) -> None:
+        """Stop all channels and restart with a new config."""
+        _LOGGER.info("Reloading channel manager with new config")
+        await self.stop()
+        self._config = config
+        self._running = False
+        self._channels.clear()
+        await self.start()
+
+    def get_status(self) -> dict[str, Any]:
+        """Return a status dict for each known channel."""
+        status: dict[str, Any] = {}
+        for name, client in self._channels.items():
+            if isinstance(client, dict):
+                status[name] = {
+                    "connected": False,
+                    "status": client.get("status", "pending"),
+                }
+            else:
+                status[name] = {
+                    "connected": bool(getattr(client, "is_connected", False)),
+                    "error": getattr(client, "last_error", None),
+                }
+        return status
+
     async def _start_feishu(self, config: dict[str, Any]) -> None:
-        """Start Feishu channel."""
+        """Start Feishu channel (WebSocket long-connection, self-contained)."""
         app_id = config.get("app_id", "")
         app_secret = config.get("app_secret", "")
 
@@ -143,12 +171,13 @@ class ChannelManager:
         client = FeishuClient(
             app_id=app_id,
             app_secret=app_secret,
-            on_message=self._handle_message,
+            mimo_serve_url=self._mimo_serve_url,
             verification_token=config.get("verification_token"),
             encrypt_key=config.get("encrypt_key"),
         )
 
-        await client.start()
+        # FeishuClient.start() spawns its own WS thread and returns immediately.
+        client.start()
         self._channels["feishu"] = client
         _LOGGER.info("Feishu channel started")
 

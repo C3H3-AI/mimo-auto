@@ -13,3 +13,8 @@ mimocode_global.json
 deploy.py
 .env
 .env.*
+
+# Build/dependency artifacts
+webui/node_modules/
+__pycache__/
+*.pyc

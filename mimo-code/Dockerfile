@@ -35,7 +35,8 @@ RUN for dir in /usr/local/lib/mimo/mimocode-linux-*/bin; do \
 # bashio is already included in the HA base image
 # Install Python3 for the Web UI server
 RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://mirrors.aliyun.com|g' /etc/apk/repositories && \
-    apk add --no-cache python3
+    apk add --no-cache python3 py3-pip && \
+    pip install --break-system-packages --no-cache-dir lark-oapi
 
 # Copy s6-overlay service files and Web UI
 COPY rootfs/ /

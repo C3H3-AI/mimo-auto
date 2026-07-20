@@ -10,4 +10,8 @@ fi
 # The web UI talks to the inner (127.0.0.1) port that mimo serve listens on
 INNER_PORT=$((MIMO_PORT - 1))
 
-exec env MIMO_PORT="${INNER_PORT}" /usr/bin/python3 /usr/share/mimocode/webui/server.py
+# Persist channel config to /data (survives add-on updates), not the image layer
+mkdir -p /data/mimocode
+
+exec env MIMO_PORT="${INNER_PORT}" MIMO_CONFIG="/data/mimocode/mimo.json" \
+    /usr/bin/python3 /usr/share/mimocode/webui/server.py

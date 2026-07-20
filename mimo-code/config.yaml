@@ -1,8 +1,7 @@
 name: MiMo Code
-version: 3.2.0
+version: 4.1.0
 slug: mimo-code
-description: >-
-  MiMo Code AI 服务器，支持多通道通信（飞书、企业微信、个人微信）
+description: MiMo Code AI Server — 通过飞书/微信远程控制与维护 Home Assistant
 url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64
@@ -26,8 +25,11 @@ map:
 options:
   port: 14096
   feishu_enabled: false
+  feishu_mode: ws
   feishu_app_id: ""
   feishu_app_secret: ""
+  feishu_verification_token: ""
+  feishu_encrypt_key: ""
   wechat_enabled: false
   wechat_corp_id: ""
   wechat_agent_id: ""
@@ -38,8 +40,11 @@ options:
 schema:
   port: int(1024,65535)
   feishu_enabled: bool
+  feishu_mode: list(ws|webhook)?
   feishu_app_id: str
   feishu_app_secret: str
+  feishu_verification_token: str
+  feishu_encrypt_key: str
   wechat_enabled: bool
   wechat_corp_id: str
   wechat_agent_id: str

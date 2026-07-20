@@ -86,6 +86,8 @@ def _load_config():
 
 # Channel manager instance
 _channel_manager = None
+# The event loop that drives the channel manager (kept alive forever)
+_channel_manager_loop = None
 
 
 def _get_channel_manager():
@@ -106,13 +108,40 @@ def _get_channel_manager():
     return _channel_manager
 
 
-def _start_channels():
-    """Start channel manager in background."""
+def _reload_channels(config: dict) -> bool:
+    """Reload the channel manager with a new config (runtime, no restart)."""
+    global _channel_manager, _channel_manager_loop
     manager = _get_channel_manager()
-    if manager:
-        loop = asyncio.new_event_loop()
+    if manager is None or _channel_manager_loop is None:
+        return False
+    try:
+        asyncio.run_coroutine_threadsafe(manager.reload(config), _channel_manager_loop)
+        return True
+    except Exception as e:
+        sys.stderr.write(f"[MiMo WebUI] Reload error: {e}\n")
+        return False
+
+
+def _start_channels():
+    """Start channel manager in a dedicated, permanently-running event loop."""
+    global _channel_manager_loop
+    manager = _get_channel_manager()
+    if manager is None:
+        return
+
+    loop = asyncio.new_event_loop()
+    _channel_manager_loop = loop
+
+    def _run() -> None:
         asyncio.set_event_loop(loop)
         loop.create_task(manager.start())
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
 
 
 class ThreadingMiMoServer(ThreadingMixIn, http.server.HTTPServer):
@@ -141,8 +170,8 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            # Health check endpoint for Supervisor
-            if self.path == "/healthcheck" or self.path == "/":
+            # Health check endpoint for Supervisor (only /healthcheck, not /)
+            if self.path == "/healthcheck":
                 # Check if mimo serve is running
                 try:
                     req = urllib.request.Request(
@@ -159,10 +188,13 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pass
 
-                # If mimo serve not responding, still return 200 for WebUI
-                if self.path == "/":
-                    super().do_GET()
-                    return
+            # ---- Channel management REST (served locally, not proxied) ----
+            if self.path == "/api/channels/status":
+                self._handle_channels_status()
+                return
+            if self.path == "/api/channels":
+                self._handle_channels_get()
+                return
 
             if self.path.startswith("/api/"):
                 self._proxy_request("GET")
@@ -188,7 +220,11 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path.startswith("/api/wechat/login"):
+            if self.path == "/api/channels":
+                self._handle_channels_post()
+            elif self.path == "/api/feishu/test":
+                self._handle_feishu_test()
+            elif self.path.startswith("/api/wechat/login"):
                 self._handle_wechat_login()
             elif self.path.startswith("/api/wechat/login/status"):
                 self._handle_wechat_login_status()
@@ -515,8 +551,163 @@ def _handle_wechat_login_status(self):
         self.wfile.write(response.encode())
 
 
+# --------------------------------------------------------------------------- #
+# Channel management REST endpoints (served by the WebUI itself)
+# --------------------------------------------------------------------------- #
+_SECRET_KEYS = ("secret", "token", "aes_key", "key")
+
+
+def _read_stored_config() -> dict:
+    """Read the stored mimo.json config without env-merge side effects."""
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"channels": {}}
+
+
+def _mask_channels(channels: dict) -> dict:
+    """Mask secret fields so they are never sent back in plaintext."""
+    out: dict = {}
+    for name, ch in (channels or {}).items():
+        if isinstance(ch, dict):
+            out[name] = {
+                k: ("********" if (any(s in k.lower() for s in _SECRET_KEYS) and v) else v)
+                for k, v in ch.items()
+            }
+        else:
+            out[name] = ch
+    return out
+
+
+def _handle_channels_status(self) -> None:
+    """GET /api/channels/status — live connection status."""
+    manager = _get_channel_manager()
+    status = manager.get_status() if manager else {}
+    payload = json.dumps({"status": status}).encode("utf-8")
+    self.send_response(200)
+    self.send_header("Content-Type", "application/json")
+    self.send_header("Content-Length", str(len(payload)))
+    self.send_header("Access-Control-Allow-Origin", "*")
+    self.end_headers()
+    self.wfile.write(payload)
+
+
+def _handle_channels_get(self) -> None:
+    """GET /api/channels — current config (secrets masked) + status."""
+    stored = _read_stored_config()
+    channels = _mask_channels(stored.get("channels", {}))
+    manager = _get_channel_manager()
+    status = manager.get_status() if manager else {}
+    payload = json.dumps({
+        "channels": channels,
+        "status": status,
+    }, ensure_ascii=False).encode("utf-8")
+    self.send_response(200)
+    self.send_header("Content-Type", "application/json")
+    self.send_header("Content-Length", str(len(payload)))
+    self.send_header("Access-Control-Allow-Origin", "*")
+    self.end_headers()
+    self.wfile.write(payload)
+
+
+def _handle_channels_post(self) -> None:
+    """POST /api/channels — persist config and reload channels at runtime."""
+    try:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        incoming = json.loads(raw)
+    except Exception as e:
+        self._send_json(400, {"error": f"请求体解析失败: {e}"})
+        return
+
+    # Preserve existing secrets that the client sent back as the mask placeholder
+    stored = _read_stored_config()
+    stored_channels = stored.get("channels", {})
+    new_channels = incoming.get("channels", {})
+
+    for name, ch in new_channels.items():
+        if not isinstance(ch, dict):
+            continue
+        existing = stored_channels.get(name, {})
+        for k, v in ch.items():
+            if isinstance(v, str) and v == "********" and k in existing:
+                ch[k] = existing[k]
+
+    merged = {"channels": new_channels}
+
+    # Persist
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        self._send_json(500, {"error": f"保存失败: {e}"})
+        return
+
+    # Runtime reload (no addon restart needed)
+    ok = _reload_channels(merged)
+
+    manager = _get_channel_manager()
+    status = manager.get_status() if manager else {}
+    self._send_json(200, {
+        "success": True,
+        "reloaded": ok,
+        "channels": _mask_channels(new_channels),
+        "status": status,
+    })
+
+
+def _handle_feishu_test(self) -> None:
+    """POST /api/feishu/test — probe WS long-connection with submitted creds."""
+    try:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+
+    app_id = (data.get("app_id") or "").strip()
+    app_secret = (data.get("app_secret") or "").strip()
+
+    # Allow testing with the stored secret if the placeholder was sent back
+    if app_secret == "********":
+        stored = _read_stored_config()
+        app_secret = stored.get("channels", {}).get("feishu", {}).get("app_secret", "")
+
+    try:
+        from feishu_client import FeishuClient
+        result = FeishuClient.test_connection(app_id, app_secret, timeout=10.0)
+    except Exception as e:
+        result = {"success": False, "connected": False, "error": str(e)}
+
+    self._send_json(200, result)
+
+
+def _send_json(self, code: int, obj: dict) -> None:
+    """Helper to send a JSON response."""
+    payload = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    self.send_response(code)
+    self.send_header("Content-Type", "application/json")
+    self.send_header("Content-Length", str(len(payload)))
+    self.send_header("Access-Control-Allow-Origin", "*")
+    self.end_headers()
+    self.wfile.write(payload)
+
+
+# Bind channel/wechat handler functions as instance methods of MiMoProxyHandler.
+# They are defined as module-level functions (for readability) but are dispatched
+# via self._handle_* in do_GET/do_POST, so they must be attached to the class.
+MiMoProxyHandler._handle_wechat_login = _handle_wechat_login
+MiMoProxyHandler._handle_wechat_login_status = _handle_wechat_login_status
+MiMoProxyHandler._handle_channels_status = _handle_channels_status
+MiMoProxyHandler._handle_channels_get = _handle_channels_get
+MiMoProxyHandler._handle_channels_post = _handle_channels_post
+MiMoProxyHandler._handle_feishu_test = _handle_feishu_test
+MiMoProxyHandler._send_json = _send_json
+
+
 if __name__ == "__main__":
-    # Start channel manager in background thread
+    # Start channel manager in a dedicated, permanently-running event loop
     import threading
     channel_thread = threading.Thread(target=_start_channels, daemon=True)
     channel_thread.start()
