@@ -59,6 +59,11 @@ def _build_config_from_env():
             "enabled": True,
         }
 
+    # HA-MCP URL (from addon options)
+    ha_mcp_url = os.environ.get("HA_MCP_URL", "")
+    if ha_mcp_url:
+        config["ha_mcp_url"] = ha_mcp_url
+
     return config
 
 

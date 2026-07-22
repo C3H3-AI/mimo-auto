@@ -29,6 +29,7 @@ export WECHAT_SECRET=$(python3 -c "import json; d=json.load(open('/data/options.
 export WECHAT_TOKEN=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_token',''))")
 export WECHAT_ENCODING_AES_KEY=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_encoding_aes_key',''))")
 export PERSONAL_WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('personal_wechat_enabled',False)).lower())")
+export HA_MCP_URL=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('ha_mcp_url',''))")
 
 exec env \
     MIMO_PORT="${INNER_PORT}" \
@@ -43,4 +44,5 @@ exec env \
     WECHAT_TOKEN=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_token',''))") \
     WECHAT_ENCODING_AES_KEY=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_encoding_aes_key',''))") \
     PERSONAL_WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('personal_wechat_enabled',False)).lower())") \
+    HA_MCP_URL=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('ha_mcp_url',''))") \
     /usr/bin/python3 /usr/share/mimocode/webui/server.py
