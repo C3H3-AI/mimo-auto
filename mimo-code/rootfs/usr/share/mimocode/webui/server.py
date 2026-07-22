@@ -587,6 +587,20 @@ def _handle_wechat_login_status(self):
                             # Replace pending dict with actual client object so get_status() works
                             mgr._channels[key] = client
                             _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
+
+                            # Send welcome message to establish conversation
+                            async def send_welcome():
+                                try:
+                                    await client.send_text(
+                                        to_user_id=result.user_id,
+                                        text="你好！我是你的 Home Assistant 管家，已成功连接。有什么需要帮忙的吗？",
+                                    )
+                                    _LOGGER.info("Welcome message sent to %s", result.user_id)
+                                except Exception as e:
+                                    _LOGGER.warning("Failed to send welcome: %s", e)
+                            asyncio.run_coroutine_threadsafe(
+                                send_welcome(), _channel_manager_loop
+                            )
                             break
 
                 # Persist credentials to config file so they survive restart
@@ -601,6 +615,7 @@ def _handle_wechat_login_status(self):
                         "user_id": result.user_id,
                         "base_url": result.base_url,
                         "account_id": result.account_id or "default",
+                        "get_updates_buf": "",
                     }
                     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                         json.dump(cfg, f, indent=2, ensure_ascii=False)

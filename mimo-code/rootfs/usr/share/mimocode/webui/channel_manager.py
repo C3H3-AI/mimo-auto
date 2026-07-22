@@ -36,7 +36,7 @@ def _is_rate_limit(text: str) -> bool:
     return any(kw in lower for kw in _RATE_LIMIT_KEYWORDS)
 
 # Default config file path
-DEFAULT_CONFIG_PATH = "/usr/share/mimocode/webui/mimo.json"
+DEFAULT_CONFIG_PATH = "/data/mimocode/mimo.json"
 
 
 class ChannelManager:
@@ -231,10 +231,30 @@ class ChannelManager:
         """Start Personal WeChat channel."""
         saved_creds = config.get("credentials", {})
 
+        # Save sync_buf to config whenever it changes
+        def _on_state_change(new_buf: str) -> None:
+            try:
+                cfg = json.loads(open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8").read())
+            except Exception:
+                cfg = {"channels": {}}
+            if "personal_wechat" not in cfg.setdefault("channels", {}):
+                cfg["channels"]["personal_wechat"] = {"enabled": True}
+            if "credentials" not in cfg["channels"]["personal_wechat"]:
+                cfg["channels"]["personal_wechat"]["credentials"] = {}
+            cfg["channels"]["personal_wechat"]["credentials"]["get_updates_buf"] = new_buf
+            import os
+            try:
+                os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
+                with open(DEFAULT_CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                _LOGGER.warning("Failed to persist sync_buf: %s", e)
+
         client = PersonalWeChatClient(
             on_message=self._handle_message,
             base_url=config.get("base_url") or DEFAULT_BASE_URL,
             account_id=account_id,
+            save_state_callback=_on_state_change,
         )
 
         if saved_creds and client.load_credentials(saved_creds):

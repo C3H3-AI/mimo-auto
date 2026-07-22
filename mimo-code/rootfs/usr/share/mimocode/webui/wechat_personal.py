@@ -2,7 +2,7 @@
 
 Based on Tencent iLink Bot API protocol (from cn_im_hub).
 Supports QR code login, message receiving/sending.
-Uses aiohttp for async HTTP (no event loop blocking).
+Fully async (no blocking calls).
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ import hashlib
 import json
 import logging
 import time
-import urllib.request
-import urllib.error
 from typing import Any, Callable, Awaitable
 from uuid import uuid4
 
@@ -31,6 +29,14 @@ QR_POLL_TIMEOUT_MS = 35000
 LONG_POLL_TIMEOUT_MS = 35000
 API_TIMEOUT_MS = 15000
 LOGIN_TIMEOUT_MS = 480000  # 8 minutes
+
+# Retry / failure handling (following cn_im_hub)
+_MAX_CONSECUTIVE_FAILURES = 3
+_MAX_TOTAL_FAILURES = 8
+_BACKOFF_DELAY = 30  # seconds
+_RETRY_DELAY = 2
+_SESSION_PAUSE_SECONDS = 3600  # 1 hour pause on session expiry
+_SESSION_EXPIRED_ERRCODE = -14
 
 # Bot type
 DEFAULT_BOT_TYPE = "3"
@@ -96,28 +102,46 @@ async def _api_post(
     payload: dict[str, Any],
     token: str | None = None,
     timeout_ms: int = API_TIMEOUT_MS,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
-    """Make API POST request (async, non-blocking)."""
+    """Make API POST request (async, non-blocking).
+
+    Accepts optional reusable session (avoids creating new connection per call).
+    """
     url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
     body = json.dumps(payload, ensure_ascii=False)
     headers = _build_headers(body, token)
 
     timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, data=body.encode("utf-8"), headers=headers) as resp:
+
+    async def _do(s: aiohttp.ClientSession) -> dict[str, Any]:
+        async with s.post(url, data=body.encode("utf-8"), headers=headers) as resp:
             raw = await resp.text()
             if resp.status >= 400:
                 raise RuntimeError(f"{endpoint} {resp.status}: {raw}")
             return json.loads(raw) if raw else {}
+
+    if session is not None:
+        return await _do(session)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        return await _do(s)
+
+
+class SessionExpiredError(RuntimeError):
+    """Session token is expired/invalid. Should pause and wait for re-login."""
+    pass
 
 
 class PersonalWeChatClient:
     """Personal WeChat client using Tencent iLink Bot API.
 
     Supports:
-    - QR code login
-    - Message receiving (long polling)
-    - Message sending (text, image, file)
+    - QR code login (fully async, no blocking calls)
+    - Message receiving (long polling with retry backoff)
+    - Message sending (text)
+    - Persistence callback for sync_buf
+    - Session expiry detection
+    - Typing indicator
     """
 
     def __init__(
@@ -125,6 +149,7 @@ class PersonalWeChatClient:
         on_message: Callable[[dict], Awaitable[str]],
         base_url: str = DEFAULT_BASE_URL,
         account_id: str = "default",
+        save_state_callback: Callable[[str], None] | None = None,
     ) -> None:
         """Initialize the client.
 
@@ -132,38 +157,37 @@ class PersonalWeChatClient:
             on_message: Async callback for handling messages.
             base_url: Tencent iLink Bot API base URL.
             account_id: Account identifier.
+            save_state_callback: Called with new get_updates_buf after each poll.
         """
         self._on_message = on_message
         self._base_url = base_url
         self._account_id = account_id
+        self._save_state_callback = save_state_callback
 
         self._token: str | None = None
         self._user_id: str | None = None
         self._get_updates_buf: str = ""
         self._running = False
         self._logged_in = False
+        self._pause_until: float = 0.0
 
     @property
     def is_logged_in(self) -> bool:
         """Check if logged in."""
         return self._logged_in and self._token is not None
 
-    async def start_login(self) -> WeixinLoginSession:
-        """Start login process and return QR code.
+    # -- Login -----------------------------------------------------------------
 
-        Returns:
-            Login session with QR code data.
-        """
+    async def start_login(self) -> WeixinLoginSession:
+        """Start login process and return QR code (fully async)."""
         url = f"{self._base_url}/ilink/bot/get_bot_qrcode?bot_type={DEFAULT_BOT_TYPE}"
 
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("Content-Type", "application/json")
-
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as err:
-            raise RuntimeError(f"Failed to get QR code: {err}") from err
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                raw = await resp.text()
+                if resp.status >= 400:
+                    raise RuntimeError(f"get_bot_qrcode {resp.status}: {raw}")
+                data = json.loads(raw) if raw else {}
 
         qrcode = str(data.get("qrcode") or "")
         qrcode_url = str(data.get("qrcode_img_content") or "")
@@ -265,6 +289,11 @@ class PersonalWeChatClient:
         _LOGGER.warning("wait_login: deadline reached, raising TimeoutError")
         raise TimeoutError("微信登录超时，请重试")
 
+    def _remaining_pause(self) -> float:
+        """Seconds remaining in pause (session expired hold)."""
+        remaining = self._pause_until - time.time()
+        return remaining if remaining > 0 else 0.0
+
     async def start(self) -> None:
         """Start message receiving loop."""
         if not self._logged_in:
@@ -280,20 +309,100 @@ class PersonalWeChatClient:
         self._running = False
 
     async def _message_loop(self) -> None:
-        """Long poll for new messages."""
-        while self._running and self._logged_in:
+        """Long poll for new messages with retry backoff + session expiry."""
+        consecutive_failures = 0
+        total_failures = 0
+        next_timeout_ms = LONG_POLL_TIMEOUT_MS
+
+        while self._running and self._logged_in and total_failures < _MAX_TOTAL_FAILURES:
+            # Check if we're in a pause (session expired)
+            remaining = self._remaining_pause()
+            if remaining > 0:
+                _LOGGER.info("WeChat session paused for %d more seconds", int(remaining))
+                await asyncio.sleep(min(remaining, 60))
+                continue
+
             try:
-                await self._poll_messages()
+                data = await self._poll_messages(timeout_ms=next_timeout_ms)
+
+                # Check for session expired
+                errcode = self._extract_errcode(data)
+                if errcode == _SESSION_EXPIRED_ERRCODE:
+                    self._pause_until = time.time() + _SESSION_PAUSE_SECONDS
+                    _LOGGER.warning(
+                        "WeChat session expired (account=%s), pausing for %d minutes",
+                        self._account_id, _SESSION_PAUSE_SECONDS // 60,
+                    )
+                    consecutive_failures = 0
+                    continue
+
+                # Check for API errors
+                if self._is_api_error(data):
+                    consecutive_failures += 1
+                    _LOGGER.warning(
+                        "WeChat getupdates failed (%d/%d) account=%s ret=%s",
+                        consecutive_failures, _MAX_CONSECUTIVE_FAILURES,
+                        self._account_id, data.get("ret"),
+                    )
+                    delay = _BACKOFF_DELAY if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES else _RETRY_DELAY
+                    await asyncio.sleep(delay)
+                    if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                        consecutive_failures = 0
+                    continue
+
+                # Success: reset counters
+                consecutive_failures = 0
+
+                # Update timeout from server if provided
+                if isinstance(data.get("longpolling_timeout_ms"), int) and data["longpolling_timeout_ms"] > 0:
+                    next_timeout_ms = int(data["longpolling_timeout_ms"])
+
+                # Persist sync_buf
+                new_buf = str(data.get("get_updates_buf") or "")
+                if new_buf and new_buf != self._get_updates_buf:
+                    self._get_updates_buf = new_buf
+                    if self._save_state_callback:
+                        self._save_state_callback(new_buf)
+
+                # Process messages
+                for message in data.get("msgs") or []:
+                    if not isinstance(message, dict):
+                        continue
+                    await self._handle_message(message)
+
+            except SessionExpiredError:
+                self._pause_until = time.time() + _SESSION_PAUSE_SECONDS
+                _LOGGER.warning(
+                    "WeChat session expired (account=%s), pausing for %d minutes",
+                    self._account_id, _SESSION_PAUSE_SECONDS // 60,
+                )
+                consecutive_failures = 0
+
+            except asyncio.CancelledError:
+                raise
+
             except Exception as err:
-                _LOGGER.error("Message poll error: %s", err)
-                await asyncio.sleep(5)
+                consecutive_failures += 1
+                total_failures += 1
+                _LOGGER.warning(
+                    "WeChat poll error (attempt %d/%d, account=%s): %s",
+                    total_failures, _MAX_TOTAL_FAILURES, self._account_id, err,
+                )
+                if total_failures >= _MAX_TOTAL_FAILURES:
+                    _LOGGER.error(
+                        "WeChat connection failed after %d attempts (account=%s)",
+                        _MAX_TOTAL_FAILURES, self._account_id,
+                    )
+                    break
+                delay = _BACKOFF_DELAY if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES else _RETRY_DELAY
+                await asyncio.sleep(delay)
 
-    async def _poll_messages(self) -> None:
-        """Poll for new messages."""
+    async def _poll_messages(self, timeout_ms: int | None = None) -> dict[str, Any]:
+        """Poll for new messages. Returns the API response dict."""
         if not self._token:
-            return
+            return {"msgs": [], "get_updates_buf": self._get_updates_buf}
 
-        data = await _api_post(
+        return await _api_post(
             self._base_url,
             "ilink/bot/getupdates",
             {
@@ -301,19 +410,25 @@ class PersonalWeChatClient:
                 "base_info": {"channel_version": "mimo-code-addon"},
             },
             token=self._token,
-            timeout_ms=LONG_POLL_TIMEOUT_MS,
+            timeout_ms=timeout_ms or LONG_POLL_TIMEOUT_MS,
         )
 
-        # Update buffer for next poll
-        self._get_updates_buf = str(data.get("get_updates_buf") or "")
+    @staticmethod
+    def _extract_errcode(data: dict[str, Any]) -> int | None:
+        for key in ("errcode", "ret"):
+            val = data.get(key)
+            if isinstance(val, int):
+                return val
+        return None
 
-        # Process messages
-        msgs = data.get("msgs", [])
-        for msg in msgs:
-            await self._handle_message(msg)
+    @staticmethod
+    def _is_api_error(data: dict[str, Any]) -> bool:
+        errcode = data.get("errcode")
+        ret = data.get("ret")
+        return (isinstance(errcode, int) and errcode != 0) or (isinstance(ret, int) and ret != 0)
 
     async def _handle_message(self, msg: dict[str, Any]) -> None:
-        """Handle incoming message."""
+        """Handle incoming message with typing indicator."""
         try:
             # Extract message info
             from_user_id = str(msg.get("from_user_id") or "")
@@ -338,6 +453,9 @@ class PersonalWeChatClient:
 
             _LOGGER.info("Received WeChat message from %s: %s", from_user_id, text[:100])
 
+            # Typing indicator: send "typing" status before processing
+            asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=1))
+
             # Call message handler
             response = await self._on_message({
                 "message_id": str(msg.get("msg_id") or ""),
@@ -349,6 +467,9 @@ class PersonalWeChatClient:
                 "account_id": self._account_id,
             })
 
+            # Stop typing indicator
+            asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))
+
             # Send response if any
             if response:
                 await self.send_text(
@@ -359,6 +480,24 @@ class PersonalWeChatClient:
 
         except Exception as err:
             _LOGGER.error("Error handling WeChat message: %s", err)
+
+    async def _send_typing_indicator(self, to_user_id: str, context_token: str, status: int = 1) -> None:
+        """Send typing indicator (1=typing, 2=stop). Swallows errors silently."""
+        try:
+            await _api_post(
+                self._base_url,
+                "ilink/bot/sendtyping",
+                {
+                    "ilink_user_id": to_user_id,
+                    "typing_ticket": context_token,
+                    "status": status,
+                    "base_info": {"channel_version": "mimo-code-addon"},
+                },
+                token=self._token,
+                timeout_ms=5000,
+            )
+        except Exception:
+            _LOGGER.debug("Typing indicator ignored (non-critical)")
 
     async def send_text(
         self,
@@ -403,20 +542,21 @@ class PersonalWeChatClient:
         return client_id
 
     def save_credentials(self) -> dict[str, Any]:
-        """Save login credentials for persistence.
+        """Save login credentials + poll state for persistence.
 
         Returns:
-            Credentials dictionary.
+            Credentials dictionary including sync_buf.
         """
         return {
             "token": self._token,
             "user_id": self._user_id,
             "base_url": self._base_url,
             "account_id": self._account_id,
+            "get_updates_buf": self._get_updates_buf,
         }
 
     def load_credentials(self, creds: dict[str, Any]) -> bool:
-        """Load saved credentials.
+        """Load saved credentials + poll state.
 
         Args:
             creds: Credentials dictionary.
@@ -431,6 +571,7 @@ class PersonalWeChatClient:
         self._user_id = creds.get("user_id")
         self._base_url = creds.get("base_url", DEFAULT_BASE_URL)
         self._account_id = creds.get("account_id", "default")
+        self._get_updates_buf = str(creds.get("get_updates_buf") or "")
         self._logged_in = True
 
         _LOGGER.info("WeChat credentials loaded for %s", self._account_id)
