@@ -398,20 +398,41 @@ class PersonalWeChatClient:
                 await asyncio.sleep(delay)
 
     async def _poll_messages(self, timeout_ms: int | None = None) -> dict[str, Any]:
-        """Poll for new messages. Returns the API response dict."""
+        """Poll for new messages. Returns the API response dict.
+
+        Long-poll timeout is normal (no messages) — return empty
+        instead of raising (following cn_im_hub pattern).
+        """
         if not self._token:
+            _LOGGER.warning("WeChat _poll_messages: no token, skipping")
             return {"msgs": [], "get_updates_buf": self._get_updates_buf}
 
-        return await _api_post(
-            self._base_url,
-            "ilink/bot/getupdates",
-            {
-                "get_updates_buf": self._get_updates_buf,
-                "base_info": {"channel_version": "mimo-code-addon"},
-            },
-            token=self._token,
-            timeout_ms=timeout_ms or LONG_POLL_TIMEOUT_MS,
+        _LOGGER.debug(
+            "WeChat polling %s/getupdates (buf=%s, timeout=%sms)",
+            self._base_url, self._get_updates_buf[:16] if self._get_updates_buf else "empty",
+            timeout_ms or LONG_POLL_TIMEOUT_MS,
         )
+
+        try:
+            result = await _api_post(
+                self._base_url,
+                "ilink/bot/getupdates",
+                {
+                    "get_updates_buf": self._get_updates_buf,
+                    "base_info": {"channel_version": "mimo-code-addon"},
+                },
+                token=self._token,
+                timeout_ms=timeout_ms or LONG_POLL_TIMEOUT_MS,
+            )
+        except TimeoutError:
+            # Long-poll timeout is normal — no messages, don't count as failure
+            _LOGGER.debug("WeChat getupdates timeout (expected), retrying")
+            return {"ret": 0, "msgs": [], "get_updates_buf": self._get_updates_buf}
+
+        msg_count = len(result.get("msgs") or [])
+        _LOGGER.debug("WeChat poll result: %d msgs, errcode=%s, ret=%s",
+                       msg_count, result.get("errcode"), result.get("ret"))
+        return result
 
     @staticmethod
     def _extract_errcode(data: dict[str, Any]) -> int | None:
@@ -457,6 +478,7 @@ class PersonalWeChatClient:
             asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=1))
 
             # Call message handler
+            _LOGGER.debug("WeChat calling on_message callback for %s", from_user_id)
             response = await self._on_message({
                 "message_id": str(msg.get("msg_id") or ""),
                 "sender_id": from_user_id,
@@ -466,6 +488,7 @@ class PersonalWeChatClient:
                 "context_token": context_token,
                 "account_id": self._account_id,
             })
+            _LOGGER.debug("WeChat on_message returned: %s", response[:100] if response else "(empty)")
 
             # Stop typing indicator
             asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))

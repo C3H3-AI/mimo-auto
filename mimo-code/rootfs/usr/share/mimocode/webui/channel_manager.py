@@ -337,9 +337,14 @@ class ChannelManager:
             )
 
             # 3. Send message with system context
+            _LOGGER.info(
+                "Calling mimo serve: session=%s, text=%s, system_len=%d",
+                session_id, text[:50], len(system_prompt),
+            )
             response = await self._mimo_client.send_message(
                 text, session_id, system=system_prompt
             )
+            _LOGGER.info("mimo serve returned: %s", response[:100] if response else "(empty)")
 
             # 4. Check for rate limiting
             if response and _is_rate_limit(response):
