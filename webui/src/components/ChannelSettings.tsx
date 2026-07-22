@@ -342,7 +342,7 @@ export function ChannelSettings() {
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>正在获取二维码...</Typography>
                   </Box>
                 )}
-                {loginState.status === "qr_ready" && loginState.qrCode && (
+                {(loginState.status === "qr_ready" || loginState.status === "waiting") && loginState.qrCode && (
                   <Box textAlign="center">
                     <Box sx={{ p: 2, bgcolor: "white", borderRadius: 2, display: "inline-block", mb: 2 }}>
                       <QRCode value={loginState.qrCode} size={200} />

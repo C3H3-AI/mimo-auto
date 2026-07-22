@@ -1,0 +1,50 @@
+---
+configuration:
+  port:
+    name: 端口
+    description: MiMo AI API 监听端口 (TCP)
+  feishu_enabled:
+    name: 启用飞书
+    description: 启用飞书机器人集成，通过飞书远程控制 HA
+  feishu_mode:
+    name: 飞书连接模式
+    description: "WebSocket（局域网推荐）或 Webhook（需公网回调地址）"
+  feishu_app_id:
+    name: 飞书 App ID
+    description: 飞书开放平台的应用 ID
+  feishu_app_secret:
+    name: 飞书 App Secret
+    description: 飞书开放平台的应用密钥
+  feishu_verification_token:
+    name: 飞书 Verification Token
+    description: 飞书事件订阅的验证令牌
+  feishu_encrypt_key:
+    name: 飞书 Encrypt Key
+    description: 飞书事件订阅的加密密钥
+  wechat_enabled:
+    name: 启用企业微信
+    description: 启用企业微信机器人集成
+  wechat_corp_id:
+    name: 企业微信 Corp ID
+    description: 企业微信管理后台的企业 ID
+  wechat_agent_id:
+    name: 企业微信 Agent ID
+    description: 企业微信管理后台的应用 Agent ID
+  wechat_secret:
+    name: 企业微信 Secret
+    description: 企业微信管理后台的 Secret
+  wechat_token:
+    name: 企业微信 Token
+    description: 企业微信回调配置的 Token
+  wechat_encoding_aes_key:
+    name: 企业微信 Encoding AES Key
+    description: 企业微信回调配置的 EncodingAESKey
+  personal_wechat_enabled:
+    name: 启用个人微信
+    description: 启用个人微信扫码登录（基于 iLink Bot API）
+  ha_mcp_url:
+    name: Home Assistant MCP 地址
+    description: "MCP 服务器 Webhook URL，格式如 https://你的HA地址:8123/api/webhook/mcp_xxxxx"
+  mimo_version:
+    name: MiMo CLI 版本
+    description: 固定 MiMo AI CLI 版本（留空使用最新版）

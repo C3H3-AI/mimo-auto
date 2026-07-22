@@ -1,0 +1,50 @@
+---
+configuration:
+  port:
+    name: Port
+    description: The port on which the MiMo AI API listens (TCP)
+  feishu_enabled:
+    name: Enable Feishu / Lark
+    description: Enable Feishu (Lark) bot integration for remote AI control
+  feishu_mode:
+    name: Feishu Connection Mode
+    description: "WebSocket (recommended for LAN) or Webhook (requires public URL)"
+  feishu_app_id:
+    name: Feishu App ID
+    description: App ID from Feishu Open Platform
+  feishu_app_secret:
+    name: Feishu App Secret
+    description: App Secret from Feishu Open Platform
+  feishu_verification_token:
+    name: Feishu Verification Token
+    description: Verification Token from Feishu event subscription
+  feishu_encrypt_key:
+    name: Feishu Encrypt Key
+    description: Encrypt Key from Feishu event subscription
+  wechat_enabled:
+    name: Enable WeChat Work (Enterprise WeChat)
+    description: Enable enterprise WeChat bot integration
+  wechat_corp_id:
+    name: WeChat Work Corp ID
+    description: Corporation ID from WeChat Work admin console
+  wechat_agent_id:
+    name: WeChat Work Agent ID
+    description: Agent ID from WeChat Work admin console
+  wechat_secret:
+    name: WeChat Work Secret
+    description: Secret from WeChat Work admin console
+  wechat_token:
+    name: WeChat Work Token
+    description: Token from WeChat Work callback configuration
+  wechat_encoding_aes_key:
+    name: WeChat Work Encoding AES Key
+    description: Encoding AES Key from WeChat Work callback configuration
+  personal_wechat_enabled:
+    name: Enable Personal WeChat
+    description: Enable personal WeChat QR code login (uses iLink Bot API)
+  ha_mcp_url:
+    name: Home Assistant MCP URL
+    description: "MCP server webhook URL, e.g. https://your-ha:8123/api/webhook/mcp_xxxxx"
+  mimo_version:
+    name: MiMo CLI Version
+    description: Pin MiMo AI CLI version (leave empty for latest)

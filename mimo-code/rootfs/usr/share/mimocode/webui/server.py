@@ -80,12 +80,21 @@ def _load_config():
     except json.JSONDecodeError:
         pass
 
-    # Merge with env vars (env vars take precedence)
+    # Merge with env vars: env fields override file, EXCEPT "credentials"
+    # (preserves personal_wechat token saved during login)
     env_config = _build_config_from_env()
     if env_config.get("channels"):
         if "channels" not in config:
             config["channels"] = {}
-        config["channels"].update(env_config["channels"])
+        for ch_key, ch_val in env_config["channels"].items():
+            if ch_key not in config["channels"]:
+                config["channels"][ch_key] = ch_val
+            elif isinstance(ch_val, dict):
+                existing = config["channels"][ch_key]
+                for k, v in ch_val.items():
+                    if k == "credentials":
+                        continue  # NEVER overwrite saved credentials from env
+                    existing[k] = v
 
     # Save merged config
     try:
