@@ -148,13 +148,14 @@ class ChannelManager:
         status: dict[str, Any] = {}
         for name, client in self._channels.items():
             if isinstance(client, dict):
+                ch_status = client.get("status", "pending")
                 status[name] = {
-                    "connected": False,
-                    "status": client.get("status", "pending"),
+                    "connected": ch_status == "connected",
+                    "status": ch_status,
                 }
             else:
                 status[name] = {
-                    "connected": bool(getattr(client, "is_connected", False)),
+                    "connected": bool(getattr(client, "is_connected", False) or getattr(client, "is_logged_in", False)),
                     "error": getattr(client, "last_error", None),
                 }
         return status

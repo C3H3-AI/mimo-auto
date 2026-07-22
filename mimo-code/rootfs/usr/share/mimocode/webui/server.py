@@ -560,16 +560,18 @@ def _handle_wechat_login_status(self):
                 if mgr and _channel_manager_loop:
                     for key, ch_info in list(mgr._channels.items()):
                         if isinstance(ch_info, dict) and ch_info.get("status") == "pending_login" and "client" in ch_info:
-                            ch_info["client"].load_credentials({
+                            client = ch_info["client"]
+                            client.load_credentials({
                                 "token": result.token,
                                 "user_id": result.user_id,
                                 "base_url": result.base_url,
                                 "account_id": result.account_id or "default",
                             })
                             asyncio.run_coroutine_threadsafe(
-                                ch_info["client"].start(), _channel_manager_loop
+                                client.start(), _channel_manager_loop
                             )
-                            ch_info["status"] = "connected"
+                            # Replace pending dict with actual client object so get_status() works
+                            mgr._channels[key] = client
                             _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
                             break
         except TimeoutError:
