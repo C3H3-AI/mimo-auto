@@ -403,6 +403,8 @@ class PersonalWeChatClient:
                     "WeChat poll error (attempt %d/%d, account=%s): %s",
                     total_failures, _MAX_TOTAL_FAILURES, self._account_id, err,
                 )
+                import traceback
+                _LOGGER.warning("WeChat poll traceback: %s", traceback.format_exc())
                 if total_failures >= _MAX_TOTAL_FAILURES:
                     self._status = "error"
                     _LOGGER.error(
@@ -423,7 +425,7 @@ class PersonalWeChatClient:
             _LOGGER.warning("WeChat _poll_messages: no token, skipping")
             return {"msgs": [], "get_updates_buf": self._get_updates_buf}
 
-        _LOGGER.debug(
+        _LOGGER.info(
             "WeChat polling %s/getupdates (buf=%s, timeout=%sms)",
             self._base_url, self._get_updates_buf[:16] if self._get_updates_buf else "empty",
             timeout_ms or LONG_POLL_TIMEOUT_MS,
@@ -442,11 +444,11 @@ class PersonalWeChatClient:
             )
         except TimeoutError:
             # Long-poll timeout is normal — no messages, don't count as failure
-            _LOGGER.debug("WeChat getupdates timeout (expected), retrying")
+            _LOGGER.info("WeChat getupdates timeout (expected), retrying")
             return {"ret": 0, "msgs": [], "get_updates_buf": self._get_updates_buf}
 
         msg_count = len(result.get("msgs") or [])
-        _LOGGER.debug("WeChat poll result: %d msgs, errcode=%s, ret=%s",
+        _LOGGER.info("WeChat poll result: %d msgs, errcode=%s, ret=%s",
                        msg_count, result.get("errcode"), result.get("ret"))
         return result
 
@@ -484,8 +486,8 @@ class PersonalWeChatClient:
             if not text:
                 return
 
-            # Skip bot's own messages
-            if from_user_id == self._user_id:
+            # Skip the bot's own outgoing messages (from_user_id is the bot account)
+            if from_user_id == self._account_id:
                 return
 
             _LOGGER.info("Received WeChat message from %s: %s", from_user_id, text[:100])

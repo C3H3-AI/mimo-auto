@@ -2,19 +2,20 @@
 
 Connects to WeChat Work (企业微信) API to receive and send messages.
 Supports multiple WeChat Work accounts.
-Independent of Home Assistant - runs directly in the Addon.
-Uses only standard library (no aiohttp).
+Fully async (aiohttp, no blocking calls).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
-import urllib.request
-import urllib.error
+import xml.etree.ElementTree as ET
 from typing import Any, Callable, Awaitable
+
+import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,8 +31,8 @@ MAX_RECONNECT_DELAY = 60
 class WeChatWorkClient:
     """WeChat Work client.
 
-    Maintains connection to WeChat Work API,
-    receives messages via webhook, and sends responses.
+    Fully async (aiohttp) — no event loop blocking.
+    Tracks real connection status (not just a running flag).
     """
 
     def __init__(
@@ -66,11 +67,21 @@ class WeChatWorkClient:
         self._access_token: str | None = None
         self._token_expires: float = 0
         self._running = False
+        self._status: str = "disconnected"  # connected | disconnected | error
 
     @property
     def is_connected(self) -> bool:
-        """Check if client is active."""
-        return self._running
+        """Check if client is active (backward compat)."""
+        return self._running and self._access_token is not None
+
+    @property
+    def connection_status(self) -> str:
+        """Real connection status."""
+        if self._status == "error":
+            return "error"
+        if self._running and self._access_token:
+            return self._status if self._status == "connected" else "connected"
+        return "disconnected"
 
     async def start(self) -> None:
         """Start the WeChat Work client."""
@@ -78,59 +89,75 @@ class WeChatWorkClient:
             return
 
         self._running = True
-        # Start token refresh
+        self._status = "disconnected"
         asyncio.create_task(self._token_refresh_loop())
         _LOGGER.info("WeChat Work client started: %s", self._account_id)
 
     async def stop(self) -> None:
         """Stop the WeChat Work client."""
         self._running = False
+        self._status = "disconnected"
 
     async def _token_refresh_loop(self) -> None:
-        """Refresh access token periodically."""
+        """Refresh access token periodically (async)."""
         while self._running:
             try:
                 await self._refresh_token()
+                if self._access_token:
+                    self._status = "connected"
                 sleep_time = max(self._token_expires - time.time() - 600, 60)
                 await asyncio.sleep(sleep_time)
             except Exception as err:
+                self._status = "error"
                 _LOGGER.error("Token refresh error for %s: %s", self._account_id, err)
                 await asyncio.sleep(300)
 
     async def _refresh_token(self) -> None:
-        """Refresh access token."""
+        """Refresh access token using aiohttp (non-blocking)."""
         if self._access_token and time.time() < self._token_expires:
             return
 
         url = f"{WECHATWORK_TOKEN_URL}?corpid={self._corp_id}&corpsecret={self._secret}"
 
         try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if data.get("errcode") == 0:
-                    self._access_token = data.get("access_token")
-                    self._token_expires = time.time() + data.get("expires_in", 7200) - 600
-                    _LOGGER.info("WeChat Work token refreshed: %s", self._account_id)
-                else:
-                    _LOGGER.error("Failed to get token: %s", data.get("errmsg"))
-        except Exception as err:
-            _LOGGER.error("Token refresh error: %s", err)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    if data.get("errcode") == 0:
+                        self._access_token = data.get("access_token")
+                        self._token_expires = time.time() + data.get("expires_in", 7200) - 600
+                        _LOGGER.info("WeChat Work token refreshed: %s", self._account_id)
+                    else:
+                        _LOGGER.error(
+                            "WeChat Work token error for %s: errcode=%s errmsg=%s",
+                            self._account_id, data.get("errcode"), data.get("errmsg"),
+                        )
+        except asyncio.TimeoutError:
+            _LOGGER.warning("WeChat Work token refresh timeout for %s", self._account_id)
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("WeChat Work token refresh HTTP error for %s: %s", self._account_id, err)
 
     def verify_url(self, msg_signature: str, timestamp: str, nonce: str, echostr: str) -> str:
         """Verify WeChat Work webhook URL.
 
-        Args:
-            msg_signature: Message signature.
-            timestamp: Timestamp.
-            nonce: Nonce.
-            echostr: Echo string.
-
-        Returns:
-            Decrypted echo string.
+        Performs SHA-1 signature verification against token + timestamp + nonce.
+        Only returns echostr if signature matches.
         """
-        # Simple verification - in production, implement full signature verification
-        return echostr
+        if not self._token:
+            return echostr
+
+        expected = hashlib.sha1(
+            "".join(sorted([self._token, timestamp, nonce])).encode("utf-8")
+        ).hexdigest()
+
+        if expected == msg_signature:
+            return echostr
+
+        _LOGGER.warning(
+            "WeChat Work URL verification failed for %s: expected=%s got=%s",
+            self._account_id, expected, msg_signature,
+        )
+        return ""
 
     async def handle_webhook(
         self,
@@ -151,17 +178,21 @@ class WeChatWorkClient:
             Response XML or None.
         """
         try:
-            import xml.etree.ElementTree as ET
+            # Run XML parsing in executor to avoid blocking
+            def _parse_xml(data: bytes) -> tuple[str, str, str, str, str]:
+                root = ET.fromstring(data)
+                return (
+                    root.findtext("ToUserName", ""),
+                    root.findtext("FromUserName", ""),
+                    root.findtext("MsgType", ""),
+                    root.findtext("Content", ""),
+                    root.findtext("MsgId", ""),
+                )
 
-            # Parse XML
-            root = ET.fromstring(data)
-
-            # Extract message info
-            to_user = root.find("ToUserName").text if root.find("ToUserName") is not None else ""
-            from_user = root.find("FromUserName").text if root.find("FromUserName") is not None else ""
-            msg_type = root.find("MsgType").text if root.find("MsgType") is not None else ""
-            content = root.find("Content").text if root.find("Content") is not None else ""
-            msg_id = root.find("MsgId").text if root.find("MsgId") is not None else ""
+            loop = asyncio.get_running_loop()
+            to_user, from_user, msg_type, content, msg_id = await loop.run_in_executor(
+                None, _parse_xml, data
+            )
 
             _LOGGER.info(
                 "Received WeChat Work message from %s: %s",
@@ -194,16 +225,7 @@ class WeChatWorkClient:
             return None
 
     def _build_reply_xml(self, to_user: str, from_user: str, content: str) -> str:
-        """Build reply XML message.
-
-        Args:
-            to_user: Recipient user ID.
-            from_user: Sender user ID (should be the app).
-            content: Reply content.
-
-        Returns:
-            XML string.
-        """
+        """Build reply XML message."""
         timestamp = str(int(time.time()))
 
         xml_content = f"""<xml>
@@ -222,7 +244,7 @@ class WeChatWorkClient:
         content: str,
         msg_type: str = "text",
     ) -> bool:
-        """Send message to WeChat Work user.
+        """Send message to WeChat Work user via aiohttp (non-blocking).
 
         Args:
             user_id: User ID.
@@ -233,33 +255,39 @@ class WeChatWorkClient:
             True if sent successfully.
         """
         if not self._access_token:
-            _LOGGER.error("No access token available")
+            _LOGGER.error("No access token available for %s", self._account_id)
             return False
 
         url = f"{WECHATWORK_MESSAGE_URL}?access_token={self._access_token}"
-        payload = json.dumps({
+        payload = {
             "touser": user_id,
             "agentid": int(self._agent_id),
             "msgtype": msg_type,
             "text": {"content": content},
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        }
 
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if data.get("errcode") == 0:
-                    _LOGGER.debug("Message sent to %s", user_id)
-                    return True
-                else:
-                    _LOGGER.error("WeChat Work API error: %s", data.get("errmsg"))
-                    return False
-        except Exception as err:
-            _LOGGER.error("Failed to send message: %s", err)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, json=payload, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    data = await resp.json()
+                    if data.get("errcode") == 0:
+                        _LOGGER.debug("Message sent to %s (account=%s)", user_id, self._account_id)
+                        return True
+                    else:
+                        _LOGGER.error(
+                            "WeChat Work API error for %s: errcode=%s errmsg=%s",
+                            self._account_id, data.get("errcode"), data.get("errmsg"),
+                        )
+                        if data.get("errcode") == 40001:  # Invalid credential
+                            self._access_token = None
+                            self._token_expires = 0
+                            _LOGGER.info("WeChat Work token invalidated, will refresh on next send")
+                        return False
+        except asyncio.TimeoutError:
+            _LOGGER.warning("WeChat Work send timeout for %s (user=%s)", self._account_id, user_id)
+            return False
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("WeChat Work send HTTP error for %s: %s", self._account_id, err)
             return False
