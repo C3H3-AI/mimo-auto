@@ -30,23 +30,7 @@ def parse_ndjson_chunk(
     dedup_by_id: bool = False,
     seen_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    """Parse an NDJSON buffer, returning (extracted objects, remaining buffer).
-
-    This is a pure function with no side effects.  All callers share this
-    single implementation instead of maintaining their own parsers.
-
-    Args:
-        buffer: Raw text buffer that may contain one or more JSON objects.
-        collect_text: Extract ``{"type": "text"}`` parts from assistant messages.
-        collect_reasoning: Extract ``{"type": "reasoning"}`` parts.
-        collect_tool_calls: Extract ``{"type": "tool-call"}`` parts.
-        dedup_by_id: Skip objects whose ``info.id`` is already in *seen_ids*.
-        seen_ids: Mutable set for dedup; created internally when *None*.
-
-    Returns:
-        (list_of_extracted_objects, leftover_buffer) where each extracted
-        object is ``{"type": "text"|"reasoning"|"tool-call", "text": ...}``.
-    """
+    """Parse an NDJSON buffer, returning (extracted objects, remaining buffer)."""
     if seen_ids is None:
         seen_ids = set()
 
@@ -72,11 +56,9 @@ def parse_ndjson_chunk(
         if not isinstance(parts, list):
             continue
 
-        # Only process finished assistant messages
         if info.get("role") != "assistant" or info.get("finish") != "stop":
             continue
 
-        # Dedup
         if dedup_by_id:
             msg_id = info.get("id", "")
             if msg_id in seen_ids:
@@ -103,23 +85,12 @@ def parse_ndjson_chunk(
     return collected, buf
 
 
-def collect_text_from_ndjson(buffer: str) -> tuple[str, str]:
-    """Convenience: parse NDJSON and return concatenated text + remaining buffer."""
-    items, remaining = parse_ndjson_chunk(buffer, collect_text=True)
-    texts = [i["text"] for i in items if i["type"] == "text"]
-    return "\n".join(texts), remaining
-
-
 # ---------------------------------------------------------------------------
 # Async client
 # ---------------------------------------------------------------------------
 
 class MimoAIClient:
-    """Async HTTP client for mimo serve.
-
-    Wraps /session and /session/{id}/message endpoints with NDJSON
-    streaming support, session management, and health checks.
-    """
+    """Async HTTP client for mimo serve."""
 
     def __init__(
         self,
@@ -139,49 +110,71 @@ class MimoAIClient:
         return self._session
 
     async def ensure_session(self, session_id: str, timeout: float = 5.0) -> str:
-        """Create a session on mimo serve, return its ID.
+        """Verify session exists, create only if needed.
 
-        If *session_id* is provided and the server accepts it, it is reused.
+        If *session_id* is provided, check via GET /session/{id}.
+        Only POST /session if verification fails.
         """
         session = await self._ensure_session()
+
+        # Verify existing session
+        if session_id:
+            try:
+                async with session.get(
+                    f"{self._base_url}/session/{session_id}",
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if resp.status == 200:
+                        return session_id
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                pass
+
+        # Create new session
         try:
             async with session.post(
                 f"{self._base_url}/session",
-                json={"id": session_id} if session_id else {},
+                json={},
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("id", session_id)
-                _LOGGER.warning("ensure_session: HTTP %d", resp.status)
+                    new_id = data.get("id", "")
+                    if new_id:
+                        return new_id
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.warning("ensure_session failed: %s", err)
+
         return session_id
 
     async def send_message(
-        self, text: str, session_id: str, *, timeout: float | None = None
+        self, text: str, session_id: str, *,
+        system: str | None = None,
+        timeout: float | None = None,
     ) -> str:
         """Send a message and return the concatenated response text."""
         parts: list[str] = []
-        async for event in self.send_message_stream(text, session_id, timeout=timeout):
+        async for event in self.send_message_stream(
+            text, session_id, system=system, timeout=timeout
+        ):
             if event.get("type") == "text":
                 parts.append(event["text"])
         return "\n".join(parts)
 
     async def send_message_stream(
-        self, text: str, session_id: str, *, timeout: float | None = None
+        self, text: str, session_id: str, *,
+        system: str | None = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[dict]:
-        """Send a message and yield parsed NDJSON events as dicts.
-
-        Yields dicts like ``{"type": "text", "text": "..."}`` or
-        ``{"type": "reasoning", "text": "..."}``.
-        """
+        """Send a message and yield parsed NDJSON events as dicts."""
         session = await self._ensure_session()
         url = f"{self._base_url}/session/{session_id}/message"
-        body = {
+        body: dict[str, Any] = {
             "message": text,
             "parts": [{"type": "text", "text": text}],
         }
+        if system:
+            body["system"] = system
+
         tout = aiohttp.ClientTimeout(total=timeout or self._default_timeout)
 
         try:
@@ -234,12 +227,7 @@ class MimoAIClient:
 # ---------------------------------------------------------------------------
 
 class MimoClientSync:
-    """Synchronous wrapper around MimoAIClient for use in non-async threads.
-
-    Uses ``loop.run_until_complete()`` internally.  Must NOT be called from
-    within an existing asyncio event loop (use ``hass.async_add_executor_job``
-    or a dedicated thread instead).
-    """
+    """Synchronous wrapper around MimoAIClient for use in non-async threads."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:14096") -> None:
         self._base_url = base_url
@@ -257,30 +245,37 @@ class MimoClientSync:
         return self._client
 
     def ensure_session(self, session_id: str, timeout: float = 5.0) -> str:
-        """Create a session, return its ID."""
+        """Verify session exists, create only if needed."""
         loop = self._get_loop()
         client = self._get_client()
         return loop.run_until_complete(client.ensure_session(session_id, timeout))
 
-    def send_message(self, text: str, session_id: str, timeout: float = 180.0) -> str:
+    def send_message(
+        self, text: str, session_id: str, *,
+        system: str | None = None,
+        timeout: float = 180.0,
+    ) -> str:
         """Send a message and return the full response text."""
         loop = self._get_loop()
         client = self._get_client()
-        return loop.run_until_complete(client.send_message(text, session_id, timeout=timeout))
+        return loop.run_until_complete(
+            client.send_message(text, session_id, system=system, timeout=timeout)
+        )
 
     def send_message_stream(
-        self, text: str, session_id: str, timeout: float = 180.0
+        self, text: str, session_id: str, *,
+        system: str | None = None,
+        timeout: float = 180.0,
     ) -> list[dict]:
-        """Send a message and return all parsed NDJSON events as a list.
-
-        Collects the async stream into a list for use in synchronous contexts.
-        """
+        """Send a message and return all parsed NDJSON events as a list."""
         loop = self._get_loop()
         client = self._get_client()
 
         async def _collect() -> list[dict]:
             events: list[dict] = []
-            async for event in client.send_message_stream(text, session_id, timeout=timeout):
+            async for event in client.send_message_stream(
+                text, session_id, system=system, timeout=timeout
+            ):
                 events.append(event)
             return events
 

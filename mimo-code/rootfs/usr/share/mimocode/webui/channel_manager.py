@@ -13,11 +13,27 @@ from typing import Any, AsyncIterator
 
 from client import MimoAIClient
 from session_store import SessionStore
+from ha_context import get_ha_context_builder
 from feishu_client import FeishuClient
 from wechat_client import WeChatWorkClient
-from wechat_personal import PersonalWeChatClient
+from wechat_personal import PersonalWeChatClient, DEFAULT_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
+
+# Rate limit detection patterns (case-insensitive)
+_RATE_LIMIT_KEYWORDS = [
+    "排队等待", "token plan", "/login",
+    "subscribe", "free mode", "queue",
+    "rate limit", "too many requests",
+]
+
+RATE_LIMIT_MESSAGE = "AI 服务繁忙，请稍后再试。"
+
+
+def _is_rate_limit(text: str) -> bool:
+    """Detect mimo serve rate-limiting messages."""
+    lower = text.lower()
+    return any(kw in lower for kw in _RATE_LIMIT_KEYWORDS)
 
 # Default config file path
 DEFAULT_CONFIG_PATH = "/usr/share/mimocode/webui/mimo.json"
@@ -217,7 +233,7 @@ class ChannelManager:
 
         client = PersonalWeChatClient(
             on_message=self._handle_message,
-            base_url=config.get("base_url", ""),
+            base_url=config.get("base_url") or DEFAULT_BASE_URL,
             account_id=account_id,
         )
 
@@ -273,6 +289,7 @@ class ChannelManager:
         """Call mimo serve API to get AI response (async, via MimoAIClient).
 
         Uses session persistence across restarts via SessionStore.
+        Injects HA device context into system prompt for smart responses.
 
         Args:
             text: User message text.
@@ -282,14 +299,33 @@ class ChannelManager:
             AI response text.
         """
         try:
-            # Restore session from persistence, or create new
+            # 1. Restore session from persistence, or create new
             session_id = self._session_store.get_session_id(session_key)
-            if not session_id:
-                session_id = await self._mimo_client.ensure_session(session_key)
-                self._session_store.set_session_id(session_key, session_id)
+            session_id = await self._mimo_client.ensure_session(session_id or "")
+            # Always write back (handles idempotent writes and id changes)
+            self._session_store.set_session_id(session_key, session_id)
 
-            # Send message and get full response
-            response = await self._mimo_client.send_message(text, session_id)
+            # 2. Build system prompt with HA device context
+            ha_ctx = get_ha_context_builder()
+            device_context = await ha_ctx.get_context()
+
+            system_prompt = (
+                "你是 Home Assistant 管家。根据用户请求控制设备或回答问题。\n"
+                "如果用户要求控制设备，直接调用对应工具。\n"
+                "回复要简洁友好。\n\n"
+                f"{device_context}"
+            )
+
+            # 3. Send message with system context
+            response = await self._mimo_client.send_message(
+                text, session_id, system=system_prompt
+            )
+
+            # 4. Check for rate limiting
+            if response and _is_rate_limit(response):
+                _LOGGER.warning("MiMo rate-limited, returning fallback message")
+                return RATE_LIMIT_MESSAGE
+
             return response or ""
 
         except Exception as err:

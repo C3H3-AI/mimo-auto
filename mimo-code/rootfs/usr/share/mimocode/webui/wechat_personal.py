@@ -90,32 +90,25 @@ def _build_headers(body: str, token: str | None = None) -> dict[str, str]:
     return headers
 
 
-def _api_post(
+async def _api_post(
     base_url: str,
     endpoint: str,
     payload: dict[str, Any],
     token: str | None = None,
     timeout_ms: int = API_TIMEOUT_MS,
 ) -> dict[str, Any]:
-    """Make API POST request (synchronous)."""
+    """Make API POST request (async, non-blocking)."""
     url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
     body = json.dumps(payload, ensure_ascii=False)
+    headers = _build_headers(body, token)
 
-    req = urllib.request.Request(
-        url,
-        data=body.encode("utf-8"),
-        headers=_build_headers(body, token),
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_ms / 1000) as resp:
-            raw = resp.read().decode("utf-8")
+    timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, data=body.encode("utf-8"), headers=headers) as resp:
+            raw = await resp.text()
             if resp.status >= 400:
                 raise RuntimeError(f"{endpoint} {resp.status}: {raw}")
             return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as err:
-        raise RuntimeError(f"{endpoint} {err.code}: {err.read().decode()}") from err
 
 
 class PersonalWeChatClient:
@@ -300,7 +293,7 @@ class PersonalWeChatClient:
         if not self._token:
             return
 
-        data = _api_post(
+        data = await _api_post(
             self._base_url,
             "ilink/bot/getupdates",
             {
@@ -388,7 +381,7 @@ class PersonalWeChatClient:
 
         client_id = f"mimo_{uuid4().hex}"
 
-        _api_post(
+        await _api_post(
             self._base_url,
             "ilink/bot/sendmessage",
             {

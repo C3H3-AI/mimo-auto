@@ -19,6 +19,7 @@ import threading
 import time
 from client import MimoClientSync
 from session_store import SessionStore
+from ha_context import get_ha_context_builder
 from collections import OrderedDict
 from typing import Any
 
@@ -294,16 +295,26 @@ class FeishuClient:
                    reply_fn: Any = None) -> str:
         session_id = FeishuClient._session_store.get_session_id(conv_id) or conv_id or user_id or "feishu-default"
         try:
-            # Ensure session exists
+            # 1. Verify/create session, always write back
             session_id = self._mimo_client.ensure_session(session_id)
-            if conv_id and not FeishuClient._session_store.get_session_id(conv_id):
-                FeishuClient._session_store.set_session_id(conv_id, session_id)
+            FeishuClient._session_store.set_session_id(conv_id, session_id)
 
-            # Send message via MimoClientSync (synchronous, runs in worker thread)
+            # 2. Build system prompt with HA context (cached, no network call)
+            ha_ctx = get_ha_context_builder()
+            device_context = ha_ctx.get_context_cached()
+
+            system_prompt = (
+                "你是 Home Assistant 管家。根据用户请求控制设备或回答问题。\n"
+                "如果用户要求控制设备，直接调用对应工具。\n"
+                "回复要简洁友好。\n\n"
+                f"{device_context}"
+            ) if device_context else None
+
+            # 3. Send message with system context
             sent_reasoning = False
-
-            # Use send_message_stream to get reasoning events for push
-            events = self._mimo_client.send_message_stream(text, session_id)
+            events = self._mimo_client.send_message_stream(
+                text, session_id, system=system_prompt
+            )
 
             # Push reasoning to user as it arrives
             for event in events:

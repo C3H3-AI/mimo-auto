@@ -180,7 +180,9 @@ export function ChannelSettings() {
   };
 
   const confirmWechatLogin = async (sessionKey: string) => {
-    setLoginState({ status: "waiting", sessionKey });
+    // Use functional updater to preserve qrCode from previous state
+    // (React 18 batches async state updates, so qrCode from qr_ready state would be lost otherwise)
+    setLoginState((prev) => ({ ...prev, status: "waiting", sessionKey }));
     // Single long request — server waits up to 8 minutes (same as cn_im_hub)
     try {
       const response = await fetch(`${C_API}/wechat/login/status`, {

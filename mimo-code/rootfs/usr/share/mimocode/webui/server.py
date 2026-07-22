@@ -898,6 +898,15 @@ if __name__ == "__main__":
     # Configure logging for _LOGGER messages
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     
+    # Pre-warm lark_oapi — import is very slow on SD cards (30s+).
+    # Doing it here before anything else so channels (feishu) don't block later.
+    sys.stderr.write("[MiMo WebUI] Warming up lark_oapi (may take a while on slow storage)...\n")
+    try:
+        __import__("lark_oapi")
+        sys.stderr.write("[MiMo WebUI] lark_oapi ready\n")
+    except Exception as e:
+        sys.stderr.write(f"[MiMo WebUI] lark_oapi warmup failed: {e}\n")
+    
     # Start channel manager via ThreadPoolExecutor (avoids asyncio thread issues)
     import threading, functools
 
