@@ -170,11 +170,23 @@ class PersonalWeChatClient:
         self._running = False
         self._logged_in = False
         self._pause_until: float = 0.0
+        self._status: str = "disconnected"  # connected | paused | session_expired | disconnected | error
 
     @property
     def is_logged_in(self) -> bool:
         """Check if logged in."""
         return self._logged_in and self._token is not None
+
+    @property
+    def connection_status(self) -> str:
+        """Real connection status: connected, session_expired, paused, error, disconnected."""
+        if self._pause_until > time.time():
+            return "session_expired"
+        if self._status == "error":
+            return "error"
+        if self._running and self._logged_in:
+            return "connected"
+        return self._status
 
     # -- Login -----------------------------------------------------------------
 
@@ -301,6 +313,7 @@ class PersonalWeChatClient:
             return
 
         self._running = True
+        self._status = "connected"
         asyncio.create_task(self._message_loop())
         _LOGGER.info("WeChat message loop started")
 
@@ -329,6 +342,7 @@ class PersonalWeChatClient:
                 errcode = self._extract_errcode(data)
                 if errcode == _SESSION_EXPIRED_ERRCODE:
                     self._pause_until = time.time() + _SESSION_PAUSE_SECONDS
+                    self._status = "session_expired"
                     _LOGGER.warning(
                         "WeChat session expired (account=%s), pausing for %d minutes",
                         self._account_id, _SESSION_PAUSE_SECONDS // 60,
@@ -372,6 +386,7 @@ class PersonalWeChatClient:
 
             except SessionExpiredError:
                 self._pause_until = time.time() + _SESSION_PAUSE_SECONDS
+                self._status = "session_expired"
                 _LOGGER.warning(
                     "WeChat session expired (account=%s), pausing for %d minutes",
                     self._account_id, _SESSION_PAUSE_SECONDS // 60,
@@ -389,6 +404,7 @@ class PersonalWeChatClient:
                     total_failures, _MAX_TOTAL_FAILURES, self._account_id, err,
                 )
                 if total_failures >= _MAX_TOTAL_FAILURES:
+                    self._status = "error"
                     _LOGGER.error(
                         "WeChat connection failed after %d attempts (account=%s)",
                         _MAX_TOTAL_FAILURES, self._account_id,
@@ -596,6 +612,7 @@ class PersonalWeChatClient:
         self._account_id = creds.get("account_id", "default")
         self._get_updates_buf = str(creds.get("get_updates_buf") or "")
         self._logged_in = True
+        self._status = "disconnected"  # loaded but not yet polling
 
         _LOGGER.info("WeChat credentials loaded for %s", self._account_id)
         return True

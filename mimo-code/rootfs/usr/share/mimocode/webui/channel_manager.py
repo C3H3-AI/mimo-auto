@@ -170,10 +170,18 @@ class ChannelManager:
                     "status": ch_status,
                 }
             else:
-                status[name] = {
-                    "connected": bool(getattr(client, "is_connected", False) or getattr(client, "is_logged_in", False)),
-                    "error": getattr(client, "last_error", None),
-                }
+                status_str = getattr(client, "connection_status", None)
+                if status_str:
+                    status[name] = {
+                        "connected": status_str == "connected",
+                        "status": status_str,
+                        "error": getattr(client, "last_error", None),
+                    }
+                else:
+                    status[name] = {
+                        "connected": bool(getattr(client, "is_connected", False) or getattr(client, "is_logged_in", False)),
+                        "error": getattr(client, "last_error", None),
+                    }
         return status
 
     async def _start_feishu(self, config: dict[str, Any]) -> None:
