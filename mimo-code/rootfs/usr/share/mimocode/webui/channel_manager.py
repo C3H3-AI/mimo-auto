@@ -199,6 +199,7 @@ class ChannelManager:
             mimo_serve_url=self._mimo_serve_url,
             verification_token=config.get("verification_token"),
             encrypt_key=config.get("encrypt_key"),
+            show_reasoning=bool(config.get("show_reasoning", True)),
         )
 
         client.start()
@@ -263,6 +264,8 @@ class ChannelManager:
             base_url=config.get("base_url") or DEFAULT_BASE_URL,
             account_id=account_id,
             save_state_callback=_on_state_change,
+            show_reasoning=bool(config.get("show_reasoning", True)),
+            mimo_serve_url=self._mimo_serve_url,
         )
 
         if saved_creds and client.load_credentials(saved_creds):

@@ -55,12 +55,14 @@ class FeishuClient:
         mimo_serve_url: str = "http://127.0.0.1:14096",
         verification_token: str | None = None,
         encrypt_key: str | None = None,
+        show_reasoning: bool = True,
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
         self._mimo_serve_url = mimo_serve_url
         self._verification_token = verification_token
         self._encrypt_key = encrypt_key
+        self._show_reasoning = show_reasoning
 
         self._running = False
         self._stop_flag = False
@@ -316,13 +318,14 @@ class FeishuClient:
                 text, session_id, system=system_prompt
             )
 
-            # Push reasoning to user as it arrives
-            for event in events:
-                if event.get("type") == "reasoning" and not sent_reasoning:
-                    r = event.get("text", "").strip()
-                    if r and reply_fn:
-                        reply_fn(f"> 思考过程：\n\n{r}")
-                        sent_reasoning = True
+            # Push reasoning to user as it arrives (if enabled)
+            if self._show_reasoning:
+                for event in events:
+                    if event.get("type") == "reasoning" and not sent_reasoning:
+                        r = event.get("text", "").strip()
+                        if r and reply_fn:
+                            reply_fn(f"> 思考过程：\n\n{r}")
+                            sent_reasoning = True
 
             # Collect final text response
             final = "\n".join(

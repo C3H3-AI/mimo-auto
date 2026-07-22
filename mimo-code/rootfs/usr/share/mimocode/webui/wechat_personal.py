@@ -150,6 +150,8 @@ class PersonalWeChatClient:
         base_url: str = DEFAULT_BASE_URL,
         account_id: str = "default",
         save_state_callback: Callable[[str], None] | None = None,
+        show_reasoning: bool = False,
+        mimo_serve_url: str | None = None,
     ) -> None:
         """Initialize the client.
 
@@ -158,11 +160,15 @@ class PersonalWeChatClient:
             base_url: Tencent iLink Bot API base URL.
             account_id: Account identifier.
             save_state_callback: Called with new get_updates_buf after each poll.
+            show_reasoning: If True, push AI reasoning as intermediate text messages.
+            mimo_serve_url: URL for Mimo AI streaming (required if show_reasoning).
         """
         self._on_message = on_message
         self._base_url = base_url
         self._account_id = account_id
         self._save_state_callback = save_state_callback
+        self._show_reasoning = show_reasoning
+        self._mimo_url = mimo_serve_url
 
         self._token: str | None = None
         self._user_id: str | None = None
@@ -495,32 +501,98 @@ class PersonalWeChatClient:
             # Typing indicator: send "typing" status before processing
             asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=1))
 
-            # Call message handler
-            _LOGGER.debug("WeChat calling on_message callback for %s", from_user_id)
-            response = await self._on_message({
-                "message_id": str(msg.get("msg_id") or ""),
-                "sender_id": from_user_id,
-                "chat_id": to_user_id,
-                "text": text,
-                "msg_type": msg_type,
-                "context_token": context_token,
-                "account_id": self._account_id,
-            })
-            _LOGGER.debug("WeChat on_message returned: %s", response[:100] if response else "(empty)")
+            if self._show_reasoning and self._mimo_url:
+                # Streaming mode: push reasoning as it arrives, then send final response
+                await self._handle_message_streaming(from_user_id, context_token, text)
+            else:
+                # Standard mode: call handler, get single response
+                response = await self._on_message({
+                    "message_id": str(msg.get("msg_id") or ""),
+                    "sender_id": from_user_id,
+                    "chat_id": to_user_id,
+                    "text": text,
+                    "msg_type": msg_type,
+                    "context_token": context_token,
+                    "account_id": self._account_id,
+                })
 
-            # Stop typing indicator
-            asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))
+                # Stop typing indicator
+                asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))
 
-            # Send response if any
-            if response:
-                await self.send_text(
-                    to_user_id=from_user_id,
-                    text=response,
-                    context_token=context_token,
-                )
+                # Send response if any
+                if response:
+                    await self.send_text(
+                        to_user_id=from_user_id,
+                        text=response,
+                        context_token=context_token,
+                    )
 
         except Exception as err:
             _LOGGER.error("Error handling WeChat message: %s", err)
+
+    async def _handle_message_streaming(
+        self, from_user_id: str, context_token: str, text: str,
+    ) -> None:
+        """Handle message with streaming (pushes reasoning as intermediate texts)."""
+        try:
+            from client import MimoAIClient
+
+            # Create session for streaming
+            key = f"wx_{self._account_id}_{uuid4().hex[:8]}"
+            system = self._on_message  # Not used in streaming; _on_message called below
+            session_id = f"ses_{uuid4().hex[:24]}"
+
+            async with MimoAIClient(base_url=self._mimo_url or "http://127.0.0.1:14096") as ai:
+                # Ensure session exists
+                await ai.ensure_session(session_id)
+
+                sent_reasoning = False
+                events = await ai.send_message_stream(text, session_id)
+
+                for event in events:
+                    if event.get("type") == "reasoning" and not sent_reasoning:
+                        r = event.get("text", "").strip()
+                        if r:
+                            await self.send_text(
+                                to_user_id=from_user_id,
+                                text=f"> 思考过程：\n\n{r}",
+                                context_token=context_token,
+                            )
+                            sent_reasoning = True
+
+                # Collect final response
+                final = "\n".join(
+                    e["text"] for e in events
+                    if e.get("type") == "text" and e.get("text", "").strip()
+                )
+
+                if final:
+                    await self.send_text(
+                        to_user_id=from_user_id,
+                        text=final,
+                        context_token=context_token,
+                    )
+
+                # Clean up session
+                try:
+                    await ai.delete_session(session_id)
+                except Exception:
+                    pass
+
+        except Exception as err:
+            _LOGGER.error("Error in WeChat streaming handler: %s", err)
+            # Fallback: try normal handler
+            try:
+                response = await self._on_message({
+                    "sender_id": from_user_id,
+                    "text": text,
+                    "context_token": context_token,
+                    "account_id": self._account_id,
+                })
+                if response:
+                    await self.send_text(to_user_id=from_user_id, text=response, context_token=context_token)
+            except Exception:
+                pass
 
     async def _send_typing_indicator(self, to_user_id: str, context_token: str, status: int = 1) -> None:
         """Send typing indicator (1=typing, 2=stop). Swallows errors silently."""
