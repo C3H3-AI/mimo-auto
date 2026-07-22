@@ -574,6 +574,25 @@ def _handle_wechat_login_status(self):
                             mgr._channels[key] = client
                             _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
                             break
+
+                # Persist credentials to config file so they survive restart
+                try:
+                    cfg = _read_stored_config()
+                    if "channels" not in cfg:
+                        cfg["channels"] = {}
+                    if "personal_wechat" not in cfg["channels"]:
+                        cfg["channels"]["personal_wechat"] = {"enabled": True}
+                    cfg["channels"]["personal_wechat"]["credentials"] = {
+                        "token": result.token,
+                        "user_id": result.user_id,
+                        "base_url": result.base_url,
+                        "account_id": result.account_id or "default",
+                    }
+                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, indent=2, ensure_ascii=False)
+                    _LOGGER.info("WeChat credentials persisted to %s", CONFIG_FILE)
+                except Exception as e:
+                    _LOGGER.warning("Failed to persist WeChat credentials: %s", e)
         except TimeoutError:
             login_state["status"] = "waiting"
         except ValueError as e:

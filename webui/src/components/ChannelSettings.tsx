@@ -202,6 +202,7 @@ export function ChannelSettings() {
   };
 
   const feishuStatus = status["feishu"];
+  const wechatStatus = status["personal_wechat_default"];
 
   return (
     <Box sx={{ p: 2 }}>
@@ -329,7 +330,10 @@ export function ChannelSettings() {
             {config.personal_wechat.enabled && (
               <Box sx={{ mt: 2 }}>
                 <Divider sx={{ mb: 2 }} />
-                {loginState.status === "idle" && (
+                {loginState.status === "idle" && wechatStatus?.connected && (
+                  <Alert severity="success" sx={{ mb: 1 }}>已连接</Alert>
+                )}
+                {loginState.status === "idle" && !wechatStatus?.connected && (
                   <Button variant="contained" onClick={startWechatLogin}>扫码登录</Button>
                 )}
                 {loginState.status === "loading" && (
