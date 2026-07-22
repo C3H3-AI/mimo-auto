@@ -11,6 +11,10 @@ import {
   Tooltip,
   Breadcrumbs,
   Link,
+  Button,
+  TextField,
+  Snackbar,
+  Alert,
 } from "@mui/material";
 import FolderIcon from "@mui/icons-material/Folder";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
@@ -19,6 +23,9 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import CodeIcon from "@mui/icons-material/Code";
 import TextSnippetIcon from "@mui/icons-material/TextSnippet";
 import ImageIcon from "@mui/icons-material/Image";
+import EditIcon from "@mui/icons-material/Edit";
+import SaveIcon from "@mui/icons-material/Save";
+import CloseIcon from "@mui/icons-material/Close";
 import { MimoClient } from "../api/mimoClient";
 import type { FileEntry } from "../types";
 
@@ -48,29 +55,81 @@ interface FileViewerProps {
 
 function FileViewer({ filePath, onClose }: FileViewerProps) {
   const [content, setContent] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; severity: "success" | "error" } | null>(null);
 
   useEffect(() => {
     setLoading(true);
-    MimoClient.readFile(filePath)
-      .then((data) => setContent(typeof data === "string" ? data : JSON.stringify(data, null, 2)))
+    MimoClient.fsRead(filePath)
+      .then((data) => {
+        const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+        setContent(text);
+        setEditContent(text);
+      })
       .catch(() => setContent("Failed to load file"))
       .finally(() => setLoading(false));
   }, [filePath]);
 
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const ok = await MimoClient.fsWrite(filePath, editContent);
+      if (ok) {
+        setContent(editContent);
+        setEditing(false);
+        setToast({ msg: "Saved", severity: "success" });
+      } else {
+        setToast({ msg: "Save failed", severity: "error" });
+      }
+    } catch {
+      setToast({ msg: "Save error", severity: "error" });
+    }
+    setSaving(false);
+  };
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {toast && (
+        <Snackbar open autoHideDuration={3000} onClose={() => setToast(null)} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+          <Alert severity={toast.severity} variant="filled" sx={{ width: "100%" }}>{toast.msg}</Alert>
+        </Snackbar>
+      )}
       <Box sx={{ p: 1, borderBottom: "1px solid", borderColor: "divider", display: "flex", alignItems: "center", gap: 1 }}>
         <IconButton size="small" onClick={onClose}><ArrowBackIcon fontSize="small" /></IconButton>
-        <Typography variant="body2" sx={{ fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <Typography variant="body2" sx={{ fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {filePath}
         </Typography>
+        {editing ? (
+          <>
+            <Button size="small" variant="contained" startIcon={<SaveIcon />} onClick={handleSave} disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+            <IconButton size="small" onClick={() => { setEditing(false); setEditContent(content); }}><CloseIcon fontSize="small" /></IconButton>
+          </>
+        ) : (
+          <IconButton size="small" onClick={() => setEditing(true)} title="Edit"><EditIcon fontSize="small" /></IconButton>
+        )}
       </Box>
-      <Box sx={{ flex: 1, overflow: "auto", p: 2, bgcolor: "action.hover" }}>
+      <Box sx={{ flex: 1, overflow: "auto", bgcolor: "action.hover" }}>
         {loading ? (
           <Box sx={{ display: "flex", justifyContent: "center", p: 4 }}><CircularProgress size={24} /></Box>
+        ) : editing ? (
+          <TextField
+            fullWidth
+            multiline
+            variant="standard"
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            sx={{
+              "& .MuiInputBase-root": { fontFamily: "monospace", fontSize: "0.8rem", p: 2 },
+              "& .MuiInputBase-input": { fontFamily: "monospace", fontSize: "0.8rem" },
+            }}
+          />
         ) : (
-          <pre style={{ margin: 0, fontSize: "0.8rem", fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          <pre style={{ margin: 0, padding: 16, fontSize: "0.8rem", fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {content}
           </pre>
         )}
@@ -92,7 +151,7 @@ export function FileExplorer({ compact = false }: FileExplorerProps) {
   const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
     try {
-      const data = await MimoClient.listFiles(path);
+      const data = await MimoClient.fsList(path);
       // mimo serve returns array of {name, path, type, ...}
       const items = Array.isArray(data) ? data : [];
       setEntries(items.map((item: any) => ({

@@ -2,7 +2,7 @@
 
 Based on Tencent iLink Bot API protocol (from cn_im_hub).
 Supports QR code login, message receiving/sending.
-Uses only standard library + minimal dependencies.
+Uses aiohttp for async HTTP (no event loop blocking).
 """
 
 from __future__ import annotations
@@ -18,11 +18,13 @@ import urllib.error
 from typing import Any, Callable, Awaitable
 from uuid import uuid4
 
+import aiohttp
+
 _LOGGER = logging.getLogger(__name__)
 
-# Tencent iLink Bot API endpoints
-DEFAULT_BASE_URL = "https://ilink-bot.weixin.qq.com"
-CDN_BASE_URL = "https://cdn.ilink-bot.weixin.qq.com"
+# Tencent iLink Bot API endpoints (same as cn_im_hub)
+DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
+CDN_BASE_URL = "https://c2cwxappimg.weixin.qq.com"
 
 # Timeouts
 QR_POLL_TIMEOUT_MS = 35000
@@ -189,6 +191,9 @@ class PersonalWeChatClient:
     ) -> WeixinLoginResult:
         """Wait for user to scan QR code and confirm login.
 
+        Uses aiohttp for truly async HTTP calls (no event loop blocking).
+        Does NOT swallow API errors silently — lets real errors propagate.
+
         Args:
             login: Login session from start_login.
             timeout_ms: Timeout in milliseconds.
@@ -198,52 +203,74 @@ class PersonalWeChatClient:
         """
         deadline = time.time() + max(timeout_ms / 1000, 1)
 
-        while time.time() < deadline:
-            url = f"{self._base_url}/ilink/bot/get_qrcode_status?qrcode={login.qrcode}"
+        # get_qrcode_status is a long-poll GET with only iLink-App-ClientVersion header.
+        long_poll_headers = {"iLink-App-ClientVersion": "1"}
+        timeout_sec = min(QR_POLL_TIMEOUT_MS, timeout_ms) / 1000
 
-            req = urllib.request.Request(url, method="GET")
-            req.add_header("iLink-App-ClientVersion", "1")
+        _LOGGER.warning("wait_login started, qrcode=%s..., url=%s, deadline=%s",
+                         login.qrcode[:16] if login.qrcode else "EMPTY",
+                         f"{self._base_url}/ilink/bot/get_qrcode_status?qrcode=...",
+                         deadline)
 
-            try:
-                with urllib.request.urlopen(req, timeout=QR_POLL_TIMEOUT_MS / 1000) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-            except Exception:
-                data = {"status": "wait"}
+        async with aiohttp.ClientSession() as session:
+            while time.time() < deadline:
+                url = f"{self._base_url}/ilink/bot/get_qrcode_status?qrcode={login.qrcode}"
 
-            status = str(data.get("status") or "wait")
+                try:
+                    async with session.get(url, headers=long_poll_headers, timeout=aiohttp.ClientTimeout(total=timeout_sec)) as resp:
+                        text = await resp.text()
+                        if resp.status >= 400:
+                            _LOGGER.warning("get_qrcode_status HTTP %s: %s", resp.status, text[:200])
+                            await asyncio.sleep(2)
+                            continue
+                        data = json.loads(text) if text else {}
+                        _LOGGER.warning("get_qrcode_status response: %s", text[:300])
+                except TimeoutError:
+                    # Long-poll timeout is normal — retry immediately
+                    _LOGGER.warning("get_qrcode_status timed out after %ss (expected), retrying", timeout_sec)
+                    continue
+                except (aiohttp.ClientError, json.JSONDecodeError) as err:
+                    _LOGGER.warning("get_qrcode_status error: %s, retrying...", err)
+                    await asyncio.sleep(2)
+                    continue
 
-            if status == "confirmed":
-                account_id = str(data.get("ilink_bot_id") or "")
-                token = str(data.get("bot_token") or "")
-                user_id = str(data.get("ilink_user_id") or "")
-                base_url = str(data.get("baseurl") or self._base_url)
+                status = str(data.get("status") or "wait")
+                _LOGGER.warning("wait_login: status=%s, data_keys=%s", status, list(data.keys()))
 
-                if not account_id or not token:
-                    raise ValueError("Login confirmed but token/account_id missing")
+                if status == "confirmed":
+                    account_id = str(data.get("ilink_bot_id") or "")
+                    token = str(data.get("bot_token") or "")
+                    user_id = str(data.get("ilink_user_id") or "")
+                    base_url = str(data.get("baseurl") or self._base_url)
 
-                # Store credentials
-                self._token = token
-                self._user_id = user_id
-                self._base_url = base_url
-                self._logged_in = True
+                    if not account_id or not token:
+                        raise ValueError("Login confirmed but token/account_id missing")
 
-                _LOGGER.info("WeChat login successful: %s", account_id)
+                    # Store credentials
+                    self._token = token
+                    self._user_id = user_id
+                    self._base_url = base_url
+                    self._logged_in = True
 
-                return WeixinLoginResult(
-                    connected=True,
-                    message="与微信连接成功",
-                    token=token,
-                    account_id=account_id,
-                    base_url=base_url,
-                    user_id=user_id,
-                )
+                    _LOGGER.info("WeChat login successful: %s", account_id)
 
-            if status == "expired":
-                raise ValueError("WeChat login QR expired")
+                    return WeixinLoginResult(
+                        connected=True,
+                        message="与微信连接成功",
+                        token=token,
+                        account_id=account_id,
+                        base_url=base_url,
+                        user_id=user_id,
+                    )
 
-            await asyncio.sleep(2)
+                if status == "expired":
+                    raise ValueError("微信二维码已过期，请重新获取")
 
-        raise TimeoutError("WeChat login timeout")
+                # Any other status → normal wait, poll again
+                await asyncio.sleep(2)
+
+        _LOGGER.warning("wait_login: deadline reached, raising TimeoutError")
+        raise TimeoutError("微信登录超时，请重试")
 
     async def start(self) -> None:
         """Start message receiving loop."""

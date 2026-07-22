@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node -e \"const fs=require('fs');const path=require('path');const src=path.join(__dirname,'dist');const dst=path.join(__dirname,'..','mimo-code','rootfs','usr','share','mimocode','webui');const assetsDir=path.join(dst,'assets');if(fs.existsSync(assetsDir)){fs.readdirSync(assetsDir).filter(f=>/^index-/.test(f)).forEach(f=>fs.unlinkSync(path.join(assetsDir,f)))};['index.html',...fs.readdirSync(path.join(src,'assets')).map(f=>'assets/'+f)].forEach(f=>{const sf=path.join(src,f);const df=path.join(dst,f);if(fs.existsSync(sf)){fs.mkdirSync(path.dirname(df),{recursive:true});fs.copyFileSync(sf,df);console.log('synced',f)}})\"",
     "preview": "vite preview"
   },
   "dependencies": {

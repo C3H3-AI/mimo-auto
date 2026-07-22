@@ -26,7 +26,7 @@ renderer.code = function (code: string, infostring: string, _escaped: boolean) {
 
   const langClass = language ? ` class="language-${language}"` : "";
   const codeId = `code-${Math.random().toString(36).slice(2, 9)}`;
-  return `<div class="code-block"><div class="code-header"><span class="code-lang">${language || "code"}</span><button class="copy-btn" onclick="window.__copyCode('${codeId}')">Copy</button></div><pre><code id="${codeId}"${langClass}>${highlighted}</code></pre></div>`;
+  return `<div class="code-block"><div class="code-header"><span class="code-lang">${language || "code"}</span><button class="copy-btn" data-code-id="${codeId}">Copy</button></div><pre><code id="${codeId}"${langClass}>${highlighted}</code></pre></div>`;
 };
 
 marked.setOptions({
@@ -37,11 +37,15 @@ marked.setOptions({
 // Use the custom renderer via use hook
 marked.use({ renderer });
 
-// Global copy function for code blocks
+// Delegated click handler for copy buttons (safe — no onclick in HTML)
 if (typeof window !== "undefined") {
-  (window as any).__copyCode = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) {
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest(".copy-btn");
+    if (!btn || !(btn instanceof HTMLElement)) return;
+    const codeId = btn.dataset.codeId;
+    if (!codeId) return;
+    const el = document.getElementById(codeId);
+    if (el && el.textContent) {
       navigator.clipboard.writeText(el.textContent || "").then(() => {
         const btn = el.closest(".code-block")?.querySelector(".copy-btn");
         if (btn) {
@@ -50,7 +54,7 @@ if (typeof window !== "undefined") {
         }
       });
     }
-  };
+  });
 }
 
 interface MarkdownRendererProps {
@@ -68,7 +72,7 @@ export function MarkdownRenderer({
     try {
       const rawHtml = marked.parse(content) as string;
       const sanitized = DOMPurify.sanitize(rawHtml, {
-        ADD_ATTR: ["target", "onclick", "id"],
+        ADD_ATTR: ["target", "id"],
       });
       return sanitized;
     } catch {

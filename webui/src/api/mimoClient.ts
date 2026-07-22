@@ -26,6 +26,9 @@ if (typeof window !== "undefined") {
 }
 console.log("[MiMo SPA] BASE_URL:", BASE_URL);
 
+/** Re-export BASE_URL so channel/wechat components can use it too. */
+export const API_BASE_URL = BASE_URL;
+
 class MimoApiError extends Error {
   constructor(
     public status: number,
@@ -232,6 +235,36 @@ export const MimoClient = {
   async readFile(path: string): Promise<string> {
     const res = await fetch(`${BASE_URL}/file?path=${encodeURIComponent(path)}`);
     return res.text();
+  },
+
+  async writeFile(path: string, content: string): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/file?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: content,
+    });
+    return res.ok;
+  },
+
+  /* ===== Filesystem (direct, bypasses mimo workspace restriction) ===== */
+
+  async fsList(path: string = "/"): Promise<any[]> {
+    const res = await fetch(`${BASE_URL}/fs/list?path=${encodeURIComponent(path || "/")}`);
+    const data = await res.json();
+    return (data && data.entries) || [];
+  },
+
+  async fsRead(path: string): Promise<string> {
+    const res = await fetch(`${BASE_URL}/fs/read?path=${encodeURIComponent(path)}`);
+    return res.text();
+  },
+
+  async fsWrite(path: string, content: string): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/fs/write?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      body: content,
+    });
+    return res.ok;
   },
 
   /* ===== Message Management ===== */

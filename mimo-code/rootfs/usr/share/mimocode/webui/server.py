@@ -3,12 +3,15 @@
 import asyncio
 import http.server
 import json
+import logging
 import os
 import sys
 import urllib.request
 import urllib.error
 import re
 from socketserver import ThreadingMixIn
+
+_LOGGER = logging.getLogger(__name__)
 
 MIMO_PORT = int(os.environ.get("MIMO_PORT", "14096"))
 MIMO_API_BASE = f"http://127.0.0.1:{MIMO_PORT}"
@@ -17,6 +20,11 @@ DIST_DIR = os.path.join(WEBUI_DIR, "dist")
 PORT = int(os.environ.get("WEBUI_PORT", "8099"))
 MIMO_WORKDIR = os.environ.get("MIMO_WORKDIR", "/data/mimocode")
 CONFIG_FILE = os.environ.get("MIMO_CONFIG", os.path.join(WEBUI_DIR, "mimo.json"))
+# Fallback: if the configured config file doesn't exist, try the data dir
+if not os.path.exists(CONFIG_FILE):
+    fallback = "/data/mimocode/mimo.json"
+    if os.path.exists(fallback):
+        CONFIG_FILE = fallback
 
 
 def _build_config_from_env():
@@ -122,26 +130,7 @@ def _reload_channels(config: dict) -> bool:
         return False
 
 
-def _start_channels():
-    """Start channel manager in a dedicated, permanently-running event loop."""
-    global _channel_manager_loop
-    manager = _get_channel_manager()
-    if manager is None:
-        return
-
-    loop = asyncio.new_event_loop()
-    _channel_manager_loop = loop
-
-    def _run() -> None:
-        asyncio.set_event_loop(loop)
-        loop.create_task(manager.start())
-        try:
-            loop.run_forever()
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+# _start_channels() is no longer used; channel init moved inline in __main__
 
 
 class ThreadingMiMoServer(ThreadingMixIn, http.server.HTTPServer):
@@ -196,6 +185,47 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 self._handle_channels_get()
                 return
 
+            # ---- Filesystem API (bypasses mimo serve's dir restriction) ----
+            if self.path.startswith("/api/fs/list"):
+                self._handle_fs_list()
+                return
+            if self.path.startswith("/api/fs/read"):
+                self._handle_fs_read()
+                return
+            if self.path.startswith("/api/fs/write"):
+                self._handle_fs_write()
+                return
+
+            # ---- Native TUI panel (currently unavailable) ----
+            if self.path in ("/native-panel", "/native-panel/"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write("""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MiMo Code</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f5f5f5;font-family:system-ui,sans-serif;padding:32px;max-width:600px;margin:0 auto}
+h2{font-size:16px;margin-bottom:16px;color:#333}
+p{font-size:13px;line-height:1.6;color:#555;margin-bottom:12px}
+a{color:#1976d2;text-decoration:none}
+.box{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:20px;margin-bottom:16px}
+</style>
+</head>
+<body>
+<h2>MiMo Code</h2>
+<div class="box">
+<p>请使用侧边栏 MiMo Code 面板或通过飞书/微信进行对话。</p>
+<p><a href="/">← 返回主面板</a></p>
+</div>
+</body>
+</html>""".encode("utf-8"))
+                return
+
             if self.path.startswith("/api/"):
                 self._proxy_request("GET")
             else:
@@ -224,10 +254,10 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 self._handle_channels_post()
             elif self.path == "/api/feishu/test":
                 self._handle_feishu_test()
-            elif self.path.startswith("/api/wechat/login"):
-                self._handle_wechat_login()
             elif self.path.startswith("/api/wechat/login/status"):
                 self._handle_wechat_login_status()
+            elif self.path.startswith("/api/wechat/login"):
+                self._handle_wechat_login()
             elif self.path.startswith("/api/"):
                 self._proxy_request("POST")
             else:
@@ -427,11 +457,12 @@ def _handle_wechat_login(self):
         sys.path.insert(0, WEBUI_DIR)
         from wechat_personal import PersonalWeChatClient
 
-        # Create client and start login
+        # Create client and start login (store for reuse in status check)
+        client = PersonalWeChatClient(
+            on_message=lambda msg: asyncio.sleep(0),  # Dummy handler
+        )
+
         async def do_login():
-            client = PersonalWeChatClient(
-                on_message=lambda msg: asyncio.sleep(0),  # Dummy handler
-            )
             login_session = await client.start_login()
             return login_session
 
@@ -442,13 +473,13 @@ def _handle_wechat_login(self):
         finally:
             loop.close()
 
-        # Store login state
+        # Store login state (with the same client for status check reuse)
         session_key = login_session.session_key
         _login_states[session_key] = {
             "qrcode": login_session.qrcode,
             "qrcode_url": login_session.qrcode_url,
             "status": "waiting",
-            "client": None,
+            "client": client,
         }
 
         # Return QR code to frontend
@@ -491,22 +522,26 @@ def _handle_wechat_login_status(self):
             return
 
         login_state = _login_states[session_key]
+        client = login_state.get("client")
 
-        # Check login status
-        async def check_status():
+        # If no stored client, create one (shouldn't happen in normal flow)
+        if client is None:
             sys.path.insert(0, WEBUI_DIR)
             from wechat_personal import PersonalWeChatClient
-
             client = PersonalWeChatClient(
                 on_message=lambda msg: asyncio.sleep(0),
+                base_url="https://ilinkai.weixin.qq.com",
             )
+
+        # Check login status by polling
+        async def check_status():
             result = await client.wait_login(
                 type("LoginSession", (), {
                     "session_key": session_key,
                     "qrcode": login_state["qrcode"],
                     "qrcode_url": login_state["qrcode_url"],
                 })(),
-                timeout_ms=5000,  # Short timeout for status check
+                timeout_ms=480000,
             )
             return result
 
@@ -519,6 +554,24 @@ def _handle_wechat_login_status(self):
                 login_state["account_id"] = result.account_id
                 login_state["base_url"] = result.base_url
                 login_state["user_id"] = result.user_id
+
+                # Propagate credentials to channel manager so it can start polling messages
+                mgr = _get_channel_manager()
+                if mgr and _channel_manager_loop:
+                    for key, ch_info in list(mgr._channels.items()):
+                        if isinstance(ch_info, dict) and ch_info.get("status") == "pending_login" and "client" in ch_info:
+                            ch_info["client"].load_credentials({
+                                "token": result.token,
+                                "user_id": result.user_id,
+                                "base_url": result.base_url,
+                                "account_id": result.account_id or "default",
+                            })
+                            asyncio.run_coroutine_threadsafe(
+                                ch_info["client"].start(), _channel_manager_loop
+                            )
+                            ch_info["status"] = "connected"
+                            _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
+                            break
         except TimeoutError:
             login_state["status"] = "waiting"
         except ValueError as e:
@@ -694,6 +747,106 @@ def _send_json(self, code: int, obj: dict) -> None:
     self.wfile.write(payload)
 
 
+# ------------------------------------------------------------------ #
+# Filesystem API (bypasses mimo serve's project-dir restriction)
+# ------------------------------------------------------------------ #
+def _sanitize_fs_path(raw: str) -> str | None:
+    """Resolve and validate a filesystem path. Returns None if path is outside allowed dirs."""
+    from pathlib import Path
+    ALLOWED_PREFIXES = ["/data", "/config", "/usr/share/mimocode"]
+    try:
+        p = Path(raw).resolve()
+        for prefix in ALLOWED_PREFIXES:
+            if str(p).startswith(prefix):
+                return str(p)
+        return None
+    except Exception:
+        return None
+
+
+def _handle_fs_list(self) -> None:
+    """GET /api/fs/list?path=... — list directory contents."""
+    import urllib.parse
+    from pathlib import Path
+    qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+    dir_path = qs.get("path", ["/"])[0]
+    safe = _sanitize_fs_path(dir_path)
+    if not safe:
+        self._send_json(403, {"error": "path not allowed"})
+        return
+    try:
+        p = Path(safe)
+        if not p.is_dir():
+            self._send_json(200, {"entries": [], "error": "not a directory"})
+            return
+        entries = []
+        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            try:
+                st = child.stat()
+                entries.append({
+                    "name": child.name,
+                    "path": str(child),
+                    "type": "directory" if child.is_dir() else "file",
+                    "size": st.st_size if child.is_file() else 0,
+                })
+            except PermissionError:
+                entries.append({
+                    "name": child.name,
+                    "path": str(child),
+                    "type": "directory" if child.is_dir() else "file",
+                })
+        self._send_json(200, {"entries": entries, "path": dir_path})
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
+
+
+def _handle_fs_read(self) -> None:
+    """GET /api/fs/read?path=... — read file content."""
+    import urllib.parse
+    qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+    file_path = qs.get("path", [""])[0]
+    safe = _sanitize_fs_path(file_path)
+    if not safe:
+        self._send_json(403, {"error": "path not allowed"})
+        return
+    try:
+        from pathlib import Path
+        p = Path(safe)
+        if not p.is_file():
+            self._send_json(404, {"error": "file not found"})
+            return
+        content = p.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(content)
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
+
+
+def _handle_fs_write(self) -> None:
+    """PUT /api/fs/write?path=... — write file content (body = raw text)."""
+    import urllib.parse
+    qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+    file_path = qs.get("path", [""])[0]
+    safe = _sanitize_fs_path(file_path)
+    if not safe:
+        self._send_json(403, {"error": "path not allowed"})
+        return
+    try:
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+        from pathlib import Path
+        p = Path(file_path).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(body)
+        self._send_json(200, {"success": True, "path": file_path})
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
+
+
 # Bind channel/wechat handler functions as instance methods of MiMoProxyHandler.
 # They are defined as module-level functions (for readability) but are dispatched
 # via self._handle_* in do_GET/do_POST, so they must be attached to the class.
@@ -707,11 +860,38 @@ MiMoProxyHandler._send_json = _send_json
 
 
 if __name__ == "__main__":
-    # Start channel manager in a dedicated, permanently-running event loop
-    import threading
-    channel_thread = threading.Thread(target=_start_channels, daemon=True)
-    channel_thread.start()
+    # Configure logging for _LOGGER messages
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    
+    # Start channel manager via ThreadPoolExecutor (avoids asyncio thread issues)
+    import threading, functools
 
+    def _start_channels_direct():
+        """Create ChannelManager and run start() synchronously in its own event loop thread."""
+        global _channel_manager_loop
+        try:
+            mgr = _get_channel_manager()
+            if mgr is None:
+                return
+            loop = asyncio.new_event_loop()
+            _channel_manager_loop = loop
+            asyncio.set_event_loop(loop)
+            # Run start() synchronously (it will complete, leaving feishu WS in daemon threads)
+            loop.run_until_complete(mgr.start())
+            sys.stderr.write(f"[MiMo WebUI] Channels active: {list(mgr._channels.keys())}\n")
+            # Keep loop alive for future reloads
+            def _keep():
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+            threading.Thread(target=_keep, daemon=True).start()
+        except Exception as e:
+            sys.stderr.write(f"[MiMo WebUI] Channel start error: {e}\n")
+            import traceback as _tb
+            _tb.print_exc()
+
+    threading.Thread(target=_start_channels_direct, daemon=True).start()
+
+    # Start HTTP server (blocks forever)
     server = ThreadingMiMoServer(("0.0.0.0", PORT), MiMoProxyHandler)
     sys.stderr.write(f"[MiMo WebUI] Server listening on port {PORT} (mimo -> {MIMO_API_BASE})\n")
     sys.stderr.write(f"[MiMo WebUI] Config file: {CONFIG_FILE}\n")

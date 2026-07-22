@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""MCP Server for Home Assistant tools.
+"""MCP HTTP Server for Home Assistant tools.
 
 Exposes Home Assistant tools via MCP (Model Context Protocol)
-so mimo serve can call them for device control, automation, etc.
+over HTTP (Streamable HTTP transport) so mimo serve can call them
+for device control, automation, etc.
+
+Listens on port 8234 by default (configurable via HA_MCP_PORT env var).
 """
 import asyncio
 import json
+import os
 import sys
 from typing import Any
+
+from aiohttp import web
 
 # HA API configuration
 HA_URL = "http://supervisor/core"
@@ -39,6 +45,9 @@ async def call_ha_service(domain: str, service: str, data: dict) -> dict:
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=data, headers=headers) as resp:
+            if resp.status >= 400:
+                err_body = await resp.text()
+                raise RuntimeError(f"HA service call failed ({resp.status}): {err_body}")
             return await resp.json()
 
 
@@ -264,28 +273,45 @@ class MCPServer:
         }
 
 
-async def main():
-    """Run MCP server on stdio."""
-    server = MCPServer()
+# ---------------------------------------------------------------------------
+# HTTP handler — serves MCP over Streamable HTTP transport
+# ---------------------------------------------------------------------------
 
-    while True:
-        try:
-            line = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
-            if not line:
-                break
+async def handle_mcp(request: web.Request) -> web.Response:
+    """Handle MCP JSON-RPC request over HTTP POST."""
+    server = request.app["mcp_server"]
+    try:
+        body = await request.json()
+        response = await server.handle_request(body)
+        return web.json_response(response)
+    except json.JSONDecodeError:
+        return web.json_response(
+            {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}},
+            status=400,
+        )
+    except Exception as e:
+        return web.json_response(
+            {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}},
+            status=500,
+        )
 
-            request = json.loads(line.strip())
-            response = await server.handle_request(request)
 
-            print(json.dumps(response, ensure_ascii=False))
-            sys.stdout.flush()
+async def handle_health(request: web.Request) -> web.Response:
+    """Health check endpoint."""
+    return web.json_response({"status": "ok"})
 
-        except json.JSONDecodeError:
-            continue
-        except Exception as e:
-            print(json.dumps({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}}))
-            sys.stdout.flush()
+
+def create_app() -> web.Application:
+    """Create the aiohttp web application."""
+    app = web.Application()
+    app["mcp_server"] = MCPServer()
+    app.router.add_post("/", handle_mcp)
+    app.router.add_get("/health", handle_health)
+    return app
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.environ.get("HA_MCP_PORT", "8234"))
+    app = create_app()
+    print(f"HA MCP Server starting on port {port}...")
+    web.run_app(app, host="127.0.0.1", port=port, print=lambda x: None)

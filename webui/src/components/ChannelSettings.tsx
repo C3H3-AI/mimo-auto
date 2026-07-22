@@ -22,6 +22,8 @@ import {
 import SaveIcon from "@mui/icons-material/Save";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import QRCode from "qrcode.react";
+import { API_BASE_URL } from "../api/mimoClient";
+const C_API = API_BASE_URL;
 
 interface ChannelConfig {
   feishu: { enabled: boolean; app_id: string; app_secret: string };
@@ -34,6 +36,7 @@ interface ChannelConfig {
     encoding_aes_key: string;
   };
   personal_wechat: { enabled: boolean };
+  ha_mcp_url: string;
 }
 
 interface StatusMap {
@@ -51,6 +54,7 @@ const EMPTY: ChannelConfig = {
     encoding_aes_key: "",
   },
   personal_wechat: { enabled: false },
+  ha_mcp_url: "",
 };
 
 export function ChannelSettings() {
@@ -76,13 +80,14 @@ export function ChannelSettings() {
 
   const loadConfig = async () => {
     try {
-      const res = await fetch("/api/channels");
+      const res = await fetch(`${C_API}/channels`);
       const data = await res.json();
       if (data.channels) {
         setConfig({
           feishu: { ...EMPTY.feishu, ...(data.channels.feishu || {}) },
           wechat: { ...EMPTY.wechat, ...(data.channels.wechat || {}) },
           personal_wechat: { ...EMPTY.personal_wechat, ...(data.channels.personal_wechat || {}) },
+          ha_mcp_url: (data.channels.ha_mcp_url || (data.ha_mcp_url || "")),
         });
       }
     } catch (err) {
@@ -92,7 +97,7 @@ export function ChannelSettings() {
 
   const pollStatus = async () => {
     try {
-      const res = await fetch("/api/channels/status");
+      const res = await fetch(`${C_API}/channels/status`);
       const data = await res.json();
       setStatus(data.status || {});
     } catch {
@@ -104,7 +109,7 @@ export function ChannelSettings() {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/channels", {
+      const res = await fetch(`${C_API}/channels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channels: config }),
@@ -127,7 +132,7 @@ export function ChannelSettings() {
     setTesting(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/feishu/test", {
+      const res = await fetch(`${C_API}/feishu/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -156,7 +161,7 @@ export function ChannelSettings() {
   const startWechatLogin = async () => {
     setLoginState({ status: "loading" });
     try {
-      const response = await fetch("/api/wechat/login", {
+      const response = await fetch(`${C_API}/wechat/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "start" }),
@@ -164,7 +169,8 @@ export function ChannelSettings() {
       const data = await response.json();
       if (data.qrcode) {
         setLoginState({ status: "qr_ready", qrCode: data.qrcode_url, sessionKey: data.session_key });
-        pollLoginStatus(data.session_key);
+        // Start polling immediately — confirmed status may be transient
+        confirmWechatLogin(data.session_key);
       } else {
         setLoginState({ status: "error", message: data.error || "获取二维码失败" });
       }
@@ -173,29 +179,26 @@ export function ChannelSettings() {
     }
   };
 
-  const pollLoginStatus = async (sessionKey: string) => {
-    for (let i = 0; i < 120; i++) {
-      try {
-        const response = await fetch("/api/wechat/login/status", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_key: sessionKey }),
-        });
-        const data = await response.json();
-        if (data.status === "success") {
-          setLoginState({ status: "success", message: "登录成功！" });
-          return;
-        }
-        if (data.status === "expired") {
-          setLoginState({ status: "error", message: "二维码已过期" });
-          return;
-        }
-      } catch {
-        /* ignore */
+  const confirmWechatLogin = async (sessionKey: string) => {
+    setLoginState({ status: "waiting", sessionKey });
+    // Single long request — server waits up to 8 minutes (same as cn_im_hub)
+    try {
+      const response = await fetch(`${C_API}/wechat/login/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_key: sessionKey }),
+      });
+      const data = await response.json();
+      if (data.status === "success") {
+        setLoginState({ status: "success", message: "登录成功！" });
+      } else if (data.status === "expired") {
+        setLoginState({ status: "error", message: "二维码已过期" });
+      } else {
+        setLoginState({ status: "error", message: data.message || "登录超时" });
       }
-      await new Promise((r) => setTimeout(r, 2000));
+    } catch {
+      setLoginState({ status: "error", message: "连接服务器失败" });
     }
-    setLoginState({ status: "error", message: "登录超时" });
   };
 
   const feishuStatus = status["feishu"];
@@ -340,7 +343,9 @@ export function ChannelSettings() {
                     <Box sx={{ p: 2, bgcolor: "white", borderRadius: 2, display: "inline-block", mb: 2 }}>
                       <QRCode value={loginState.qrCode} size={200} />
                     </Box>
-                    <Typography variant="body2" color="text.secondary">请用微信扫描上方二维码</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>请用微信扫描上方二维码</Typography>
+                    <CircularProgress size={20} />
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>等待扫码确认中...</Typography>
                   </Box>
                 )}
                 {loginState.status === "success" && <Alert severity="success">{loginState.message}</Alert>}
@@ -355,6 +360,22 @@ export function ChannelSettings() {
           </CardContent>
         </Card>
       )}
+
+      {/* HA-MCP URL */}
+      <Card sx={{ mt: 2 }}>
+        <CardContent>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Home Assistant MCP</Typography>
+          <TextField
+            fullWidth
+            size="small"
+            label="ha-mcp Webhook URL"
+            placeholder="https://api.homediy.top:8443/api/webhook/mcp_..."
+            value={config.ha_mcp_url}
+            onChange={(e) => setConfig({ ...config, ha_mcp_url: e.target.value })}
+            helperText="配置后重启 add-on 生效，mimo 可通过 ha-mcp 直接控制 HA"
+          />
+        </CardContent>
+      </Card>
 
       <Box sx={{ mt: 3, display: "flex", justifyContent: "flex-end" }}>
         <Button

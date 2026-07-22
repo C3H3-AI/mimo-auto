@@ -7,7 +7,7 @@
 ARG NODE_VERSION="22"
 FROM node:${NODE_VERSION}-alpine AS builder
 
-RUN npm install -g @mimo-ai/cli@0.1.6
+RUN npm install -g @mimo-ai/cli@latest
 
 # ============================================================
 # Stage 2: Runtime — HA base image, only the native ELF binary
@@ -35,11 +35,15 @@ RUN for dir in /usr/local/lib/mimo/mimocode-linux-*/bin; do \
 # bashio is already included in the HA base image
 # Install Python3 for the Web UI server
 RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://mirrors.aliyun.com|g' /etc/apk/repositories && \
-    apk add --no-cache python3 py3-pip && \
+    apk add --no-cache python3 py3-pip nodejs npm py3-aiohttp && \
     pip install --break-system-packages --no-cache-dir lark-oapi
 
 # Copy s6-overlay service files and Web UI
-COPY rootfs/ /
+# Clean __pycache__ from host-side rootfs first
+RUN rm -rf /tmp/rootfs_clean 2>/dev/null; mkdir -p /tmp/rootfs_clean
+COPY rootfs/ /tmp/rootfs_clean/
+RUN find /tmp/rootfs_clean -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; true && \
+    cp -r /tmp/rootfs_clean/* / && rm -rf /tmp/rootfs_clean
 
 # Arguments
 ARG BUILD_ARCH

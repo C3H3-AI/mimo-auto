@@ -2,7 +2,6 @@
 
 Manages multiple IM channel connections (Feishu, WeChat Work, Personal WeChat)
 and routes messages to mimo serve.
-Uses only standard library (no aiohttp).
 """
 
 from __future__ import annotations
@@ -10,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import urllib.request
-import urllib.error
-from typing import Any, Callable, Awaitable
+from typing import Any, AsyncIterator
 
+from client import MimoAIClient
+from session_store import SessionStore
 from feishu_client import FeishuClient
 from wechat_client import WeChatWorkClient
 from wechat_personal import PersonalWeChatClient
@@ -28,7 +27,7 @@ class ChannelManager:
     """Manages IM channel connections.
 
     Loads channel configuration, starts channel clients,
-    and routes messages to mimo serve.
+    and routes messages to mimo serve via MimoAIClient (async).
     """
 
     def __init__(
@@ -46,6 +45,8 @@ class ChannelManager:
         self._mimo_serve_url = mimo_serve_url
         self._channels: dict[str, Any] = {}
         self._running = False
+        self._mimo_client = MimoAIClient(base_url=mimo_serve_url)
+        self._session_store = SessionStore()
 
     @classmethod
     def from_config_file(
@@ -125,7 +126,6 @@ class ChannelManager:
         for name, client in self._channels.items():
             try:
                 if isinstance(client, dict):
-                    # pending login placeholder — nothing to stop
                     continue
                 await client.stop()
                 _LOGGER.info("Stopped channel: %s", name)
@@ -176,7 +176,6 @@ class ChannelManager:
             encrypt_key=config.get("encrypt_key"),
         )
 
-        # FeishuClient.start() spawns its own WS thread and returns immediately.
         client.start()
         self._channels["feishu"] = client
         _LOGGER.info("Feishu channel started")
@@ -212,29 +211,21 @@ class ChannelManager:
         _LOGGER.info("WeChat Work channel started: %s", account_id)
 
     async def _start_personal_wechat(self, config: dict[str, Any], account_id: str) -> None:
-        """Start Personal WeChat channel.
-
-        Args:
-            config: Personal WeChat configuration.
-            account_id: Account identifier.
-        """
-        # Check for saved credentials
+        """Start Personal WeChat channel."""
         saved_creds = config.get("credentials", {})
 
         client = PersonalWeChatClient(
             on_message=self._handle_message,
-            base_url=config.get("base_url", "https://ilink-bot.weixin.qq.com"),
+            base_url=config.get("base_url", ""),
             account_id=account_id,
         )
 
-        # Try to load saved credentials
         if saved_creds and client.load_credentials(saved_creds):
             await client.start()
             channel_key = f"personal_wechat_{account_id}"
             self._channels[channel_key] = client
             _LOGGER.info("Personal WeChat channel started (from saved credentials): %s", account_id)
         else:
-            # Need QR code login - store client for later
             channel_key = f"personal_wechat_{account_id}"
             self._channels[channel_key] = {
                 "client": client,
@@ -243,8 +234,12 @@ class ChannelManager:
             }
             _LOGGER.info("Personal WeChat pending QR login: %s", account_id)
 
+    # ------------------------------------------------------------------ #
+    # Message handling (async)
+    # ------------------------------------------------------------------ #
+
     async def _handle_message(self, message: dict[str, Any]) -> str:
-        """Handle incoming message from any channel.
+        """Handle incoming message from any channel (async).
 
         Args:
             message: Message dictionary with text, sender_id, chat_id, etc.
@@ -264,118 +259,41 @@ class ChannelManager:
             text[:100],
         )
 
-        # Call mimo serve
-        response = await self._call_mimo_serve(text, sender_id, chat_id)
+        session_key = f"{sender_id}:{chat_id}" if chat_id else sender_id or "default"
+        response = await self._call_mimo_serve(text, session_key)
 
         return response
 
     async def _call_mimo_serve(
         self,
         text: str,
-        user_id: str = "",
-        conversation_id: str = "",
+        session_key: str = "default",
     ) -> str:
-        """Call mimo serve API to get AI response.
+        """Call mimo serve API to get AI response (async, via MimoAIClient).
+
+        Uses session persistence across restarts via SessionStore.
 
         Args:
             text: User message text.
-            user_id: User ID for session management.
-            conversation_id: Conversation ID for session management.
+            session_key: Key for session persistence (e.g. "user_id:chat_id").
 
         Returns:
             AI response text.
         """
-        session_id = conversation_id or user_id or "default"
-
         try:
-            # Create or get session
-            session_url = f"{self._mimo_serve_url}/session"
-            session_payload = json.dumps({"id": session_id}).encode("utf-8")
-            req = urllib.request.Request(
-                session_url,
-                data=session_payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
+            # Restore session from persistence, or create new
+            session_id = self._session_store.get_session_id(session_key)
+            if not session_id:
+                session_id = await self._mimo_client.ensure_session(session_key)
+                self._session_store.set_session_id(session_key, session_id)
 
-            try:
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    session_id = data.get("id", session_id)
-            except Exception:
-                pass
-
-            # Send message
-            message_url = f"{self._mimo_serve_url}/session/{session_id}/message"
-            message_payload = json.dumps({
-                "message": text,
-                "parts": [{"type": "text", "text": text}],
-            }).encode("utf-8")
-
-            req = urllib.request.Request(
-                message_url,
-                data=message_payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                response_text = await self._parse_response(resp)
-                return response_text
+            # Send message and get full response
+            response = await self._mimo_client.send_message(text, session_id)
+            return response or ""
 
         except Exception as err:
             _LOGGER.error("Error calling mimo serve: %s", err)
             return f"Error: {str(err)}"
-
-    async def _parse_response(self, resp) -> str:
-        """Parse streaming JSON response from mimo serve.
-
-        Args:
-            resp: HTTP response with NDJSON streaming.
-
-        Returns:
-            Extracted response text.
-        """
-        collected_texts = []
-        buffer = ""
-
-        while True:
-            chunk = resp.read(4096)
-            if not chunk:
-                break
-
-            buffer += chunk.decode("utf-8", errors="replace")
-
-            while True:
-                buffer = buffer.lstrip()
-                if not buffer:
-                    break
-
-                try:
-                    obj, idx = json.JSONDecoder().raw_decode(buffer)
-                    buffer = buffer[idx:]
-
-                    if not isinstance(obj, dict):
-                        continue
-
-                    info = obj.get("info", {})
-                    parts = obj.get("parts", [])
-
-                    if info.get("role") != "assistant":
-                        continue
-                    if info.get("finish") != "stop":
-                        continue
-
-                    for part in parts:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            text = part.get("text", "").strip()
-                            if text:
-                                collected_texts.append(text)
-
-                except json.JSONDecodeError:
-                    break
-
-        return "\n".join(collected_texts) if collected_texts else ""
 
     @property
     def is_running(self) -> bool:
@@ -388,11 +306,7 @@ class ChannelManager:
         return self._channels.copy()
 
     def get_pending_logins(self) -> dict[str, Any]:
-        """Get channels pending QR code login.
-
-        Returns:
-            Dict of channel_key -> client info.
-        """
+        """Get channels pending QR code login."""
         pending = {}
         for key, value in self._channels.items():
             if isinstance(value, dict) and value.get("status") == "pending_login":

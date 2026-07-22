@@ -16,7 +16,7 @@ ports:
   8099/tcp: null
 ports_description:
   14096/tcp: MiMo AI API
-  8099/tcp: Web UI (通过 ingress 访问)
+  8099/tcp: Web UI (通道管理，通过 ingress 访问)
 startup: application
 boot: auto
 watchdog: http://[HOST]:[PORT:8099]/healthcheck
@@ -37,6 +37,8 @@ options:
   wechat_token: ""
   wechat_encoding_aes_key: ""
   personal_wechat_enabled: false
+  ha_mcp_url: ""
+  mimo_version: ""
 schema:
   port: int(1024,65535)
   feishu_enabled: bool
@@ -52,3 +54,5 @@ schema:
   wechat_token: str
   wechat_encoding_aes_key: str
   personal_wechat_enabled: bool
+  ha_mcp_url: str?
+  mimo_version: str?

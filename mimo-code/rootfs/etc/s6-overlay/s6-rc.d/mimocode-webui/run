@@ -13,5 +13,34 @@ INNER_PORT=$((MIMO_PORT - 1))
 # Persist channel config to /data (survives add-on updates), not the image layer
 mkdir -p /data/mimocode
 
-exec env MIMO_PORT="${INNER_PORT}" MIMO_CONFIG="/data/mimocode/mimo.json" \
+# Bridge add-on options (Feishu/WeChat) into the env vars server.py expects.
+# server.py's _build_config_from_env() only reads FEISHU_*/WECHAT_*; without
+# this bridge the credentials in /data/options.json never reach the server and
+# the channels never connect.
+# Note: using python3 instead of bashio::config because the container may not
+# have a functional with-contenv / s6 context when started outside Supervisor.
+export FEISHU_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('feishu_enabled',False)).lower())")
+export FEISHU_APP_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('feishu_app_id',''))")
+export FEISHU_APP_SECRET=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('feishu_app_secret',''))")
+export WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('wechat_enabled',False)).lower())")
+export WECHAT_CORP_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_corp_id',''))")
+export WECHAT_AGENT_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_agent_id',''))")
+export WECHAT_SECRET=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_secret',''))")
+export WECHAT_TOKEN=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_token',''))")
+export WECHAT_ENCODING_AES_KEY=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_encoding_aes_key',''))")
+export PERSONAL_WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('personal_wechat_enabled',False)).lower())")
+
+exec env \
+    MIMO_PORT="${INNER_PORT}" \
+    MIMO_CONFIG="/data/mimocode/mimo.json" \
+    FEISHU_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('feishu_enabled',False)).lower())") \
+    FEISHU_APP_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('feishu_app_id',''))") \
+    FEISHU_APP_SECRET=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('feishu_app_secret',''))") \
+    WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('wechat_enabled',False)).lower())") \
+    WECHAT_CORP_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_corp_id',''))") \
+    WECHAT_AGENT_ID=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_agent_id',''))") \
+    WECHAT_SECRET=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_secret',''))") \
+    WECHAT_TOKEN=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_token',''))") \
+    WECHAT_ENCODING_AES_KEY=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('wechat_encoding_aes_key',''))") \
+    PERSONAL_WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('personal_wechat_enabled',False)).lower())") \
     /usr/bin/python3 /usr/share/mimocode/webui/server.py

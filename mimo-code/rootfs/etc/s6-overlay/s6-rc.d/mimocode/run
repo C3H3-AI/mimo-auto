@@ -10,16 +10,81 @@
 # Use /data/mimocode as working directory so mimo can create its project files
 mkdir -p /data/mimocode /data/mimocode/.mimocode && cd /data/mimocode || exit 1
 
-# Create project config with MiMo Auto as default model
-cat > /data/mimocode/.mimocode/mimocode.json << 'EOF'
-{"model": "mimo/mimo-auto"}
-EOF
-
 CONFIG_PATH=/data/options.json
 if [ -f "$CONFIG_PATH" ]; then
     PORT=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('port', 14096))")
+    HA_MCP_URL=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('ha_mcp_url', ''))")
+    MIMO_VERSION=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('mimo_version', ''))")
 else
     PORT=14096
+    HA_MCP_URL=""
+    MIMO_VERSION=""
+fi
+
+# Build MiMo Code project config (.mimocode/mimocode.json).
+# Register ha-mcp as a remote MCP server so mimo can control Home Assistant.
+# Priority:
+#   1. options.json (Supervisor) → HA_MCP_URL env
+#   2. mimocode.json (persistent volume, survives restart)
+#   3. WebUI channel config (mimo.json, editable via channel settings page)
+python3 - "$HA_MCP_URL" << 'PYEOF'
+import json, os, sys
+
+CFG_PATH = "/data/mimocode/.mimocode/mimocode.json"
+CHANNEL_PATH = "/data/mimocode/mimo.json"
+ha_mcp_url = (sys.argv[1] or "").strip()
+
+# 1. Read existing mimocode config if present
+cfg = {"model": "mimo/mimo-auto"}
+if os.path.exists(CFG_PATH):
+    try:
+        with open(CFG_PATH) as f:
+            existing = json.load(f)
+            if isinstance(existing, dict):
+                cfg = existing
+    except Exception:
+        pass
+
+# 2. Determine URL: options.json > default localhost:8234
+if not ha_mcp_url:
+    # Default: ha-mcp server runs on localhost:8234
+    ha_mcp_url = "http://127.0.0.1:8234"
+
+if ha_mcp_url:
+    cfg["mcp"] = {
+        "ha-mcp": {
+            "type": "remote",
+            "url": ha_mcp_url,
+            "enabled": True,
+        }
+    }
+else:
+    # No ha_mcp_url configured — mimo.json channel settings page can fix this
+    cfg["mcp"] = cfg.get("mcp") or {}
+    if isinstance(cfg.get("mcp"), dict) and "ha-mcp" in cfg["mcp"]:
+        cfg["mcp"]["ha-mcp"]["enabled"] = True  # keep existing
+
+with open(CFG_PATH, "w") as f:
+    json.dump(cfg, f, ensure_ascii=False)
+print(f"ha-mcp: registered at {ha_mcp_url}")
+PYEOF
+
+# ============================================================
+# Auto-upgrade: install/upgrade mimo on demand
+#   mimo_version=""   → use built-in binary (from Dockerfile)
+#   mimo_version=X.Y.Z → npm install -g @mimo-ai/cli@X.Y.Z
+#   mimo_version=latest → npm install -g @mimo-ai/cli@latest
+# After npm install the global symlink at /usr/local/bin/mimo is updated.
+# ============================================================
+if [ -n "$MIMO_VERSION" ]; then
+    bashio::log.info "Upgrading mimo to version: ${MIMO_VERSION} ..."
+    if npm install -g --force "@mimo-ai/cli@${MIMO_VERSION}" 2>&1; then
+        bashio::log.info "mimo upgraded successfully to ${MIMO_VERSION}"
+    else
+        bashio::log.warning "mimo upgrade failed, falling back to built-in binary"
+    fi
+else
+    bashio::log.info "mimo_version not set, using built-in binary"
 fi
 
 # Internal port: mimo serve binds to 127.0.0.1 only, one less than the external port

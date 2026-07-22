@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bashio
+# ============================================================
+# HA MCP Server — S6 Service Entry
+# Runs ha_mcp_server.py as an HTTP server on port 8234.
+# mimo serve connects to it via MCP Remote HTTP transport.
+# ============================================================
+
+HA_MCP_PORT=${HA_MCP_PORT:-8234}
+
+exec /usr/bin/python3 /usr/share/mimocode/webui/ha_mcp_server.py
