@@ -25,6 +25,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import intent
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -32,6 +33,7 @@ from .const import (
     API_CREATE_SESSION,
     API_SEND_MESSAGE,
     DOMAIN,
+    DOMAIN_NAME,
     ERROR_CONNECTION_FAILED,
     ERROR_SERVER_NOT_RUNNING,
     ERROR_TIMEOUT,
@@ -84,6 +86,12 @@ class MiMoConversationEntity(ConversationEntity):
         self._config_entry = config_entry
         self._attr_unique_id = f"{config_entry.entry_id}_conversation"
         self._attr_name = "MiMo Auto"
+        self._attr_device_info = dr.DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=DOMAIN_NAME,
+            manufacturer="MiMo",
+            model="MiMo Code Addon",
+        )
 
         # Session mapping: conversation_id -> mimo_session_id
         self._session_map: dict[str, str] = {}
@@ -120,10 +128,13 @@ class MiMoConversationEntity(ConversationEntity):
         """Process a conversation turn."""
         language = user_input.language
 
+        # Try to connect if not running (lazy connect on first use)
         if not self._coordinator.is_running:
-            intent_resp = intent.IntentResponse(language)
-            intent_resp.async_set_speech(ERROR_SERVER_NOT_RUNNING)
-            return ConversationResult(response=intent_resp)
+            await self._coordinator.async_check_health()
+            if not self._coordinator.is_running:
+                intent_resp = intent.IntentResponse(language)
+                intent_resp.async_set_speech(ERROR_SERVER_NOT_RUNNING)
+                return ConversationResult(response=intent_resp)
 
         message_text = user_input.text
         if not message_text or not message_text.strip():
@@ -249,7 +260,7 @@ class MiMoConversationEntity(ConversationEntity):
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url,
-                    json={"message": message},
+                    json={"parts": [{"type": "text", "text": message}]},
                     timeout=aiohttp.ClientTimeout(total=MESSAGE_TIMEOUT_SECONDS),
                 ) as response:
                     if response.status != 200:

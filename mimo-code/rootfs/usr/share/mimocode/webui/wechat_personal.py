@@ -779,6 +779,15 @@ class PersonalWeChatClient:
             "get_updates_buf": self._get_updates_buf,
         }
 
+    def get_status(self) -> dict[str, Any]:
+        """Return channel status dict for the channel manager."""
+        return {
+            "type": "personal_wechat",
+            "account_id": self._account_id,
+            "connected": self._running and self._logged_in,
+            "status": self.connection_status,
+        }
+
     def load_credentials(self, creds: dict[str, Any]) -> bool:
         """Load saved credentials + poll state.
 

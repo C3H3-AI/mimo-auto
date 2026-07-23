@@ -11,9 +11,10 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, DOMAIN_NAME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,12 @@ class MiMoAddonStatusSensor(SensorEntity):
         """Initialize the sensor."""
         self._coordinator = coordinator
         self._attr_unique_id = f"{config_entry.entry_id}_addon_status"
+        self._attr_device_info = dr.DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=DOMAIN_NAME,
+            manufacturer="MiMo",
+            model="MiMo Code Addon",
+        )
 
     @property
     def native_value(self) -> str:

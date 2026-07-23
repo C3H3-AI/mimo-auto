@@ -9,6 +9,15 @@
           "webui_url": "WebUI URL (optional)",
           "use_supervisor": "Auto-detect Addon via Supervisor"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure MiMo Auto",
+        "description": "Update the connection settings for the MiMo Code Addon.",
+        "data": {
+          "server_url": "mimo serve URL",
+          "webui_url": "WebUI URL (optional)",
+          "use_supervisor": "Auto-detect Addon via Supervisor"
+        }
       }
     },
     "error": {

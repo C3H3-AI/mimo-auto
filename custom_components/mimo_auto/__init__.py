@@ -18,6 +18,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -78,12 +79,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config[CONF_SERVER_URL],
         )
 
+    # Create device so entities appear under the integration card
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=DOMAIN_NAME,
+        manufacturer="MiMo",
+        model="MiMo Code Addon",
+    )
+
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
     }
 
     await _async_register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _LOGGER.info("MiMo Auto integration set up (entry: %s)", entry.entry_id)
@@ -129,12 +141,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: MiMoCoordinator = data.get("coordinator")
         if coordinator:
             await coordinator.stop()
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_CHAT)
 
-    return True
+    return unload_ok
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

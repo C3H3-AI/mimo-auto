@@ -90,15 +90,21 @@ def _load_config():
 
     # Merge with env vars: env fields override file, EXCEPT "credentials"
     # (preserves personal_wechat token saved during login)
+    # If the stored config uses list format (multi-account), skip env merge entirely
+    # for that channel — list mode means the user has already switched to multi-account.
     env_config = _build_config_from_env()
     if env_config.get("channels"):
         if "channels" not in config:
             config["channels"] = {}
         for ch_key, ch_val in env_config["channels"].items():
-            if ch_key not in config["channels"]:
+            existing = config["channels"].get(ch_key)
+            if existing is None:
                 config["channels"][ch_key] = ch_val
-            elif isinstance(ch_val, dict):
-                existing = config["channels"][ch_key]
+            elif isinstance(existing, list):
+                # Multi-account mode: preserve list config, ignore env single-entry
+                _LOGGER.info("Skipping env merge for %s: using multi-account list config", ch_key)
+                continue
+            elif isinstance(ch_val, dict) and isinstance(existing, dict):
                 for k, v in ch_val.items():
                     if k == "credentials":
                         continue  # NEVER overwrite saved credentials from env
@@ -125,8 +131,12 @@ def _get_channel_manager():
     global _channel_manager
     if _channel_manager is None:
         try:
-            # Add current directory to path for imports
+            # Add current directory and data volume to path for imports
+            # (data volume persists across restarts so hot-deployed modules are found)
             sys.path.insert(0, WEBUI_DIR)
+            DATA_WEBUI = "/data/mimocode/webui"
+            if os.path.isdir(DATA_WEBUI):
+                sys.path.insert(0, DATA_WEBUI)
             from channel_manager import ChannelManager
             config = _load_config()
             _channel_manager = ChannelManager(
@@ -206,6 +216,9 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             if self.path == "/api/channels":
                 self._handle_channels_get()
                 return
+            if self.path == "/api/accounts":
+                self._handle_accounts_list()
+                return
 
             # ---- Filesystem API (bypasses mimo serve's dir restriction) ----
             if self.path.startswith("/api/fs/list"):
@@ -216,6 +229,11 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if self.path.startswith("/api/fs/write"):
                 self._handle_fs_write()
+                return
+
+            # ---- Multi-account management page ----
+            if self.path in ("/accounts", "/accounts/"):
+                self._serve_accounts_page()
                 return
 
             # ---- Native TUI panel (currently unavailable) ----
@@ -280,6 +298,8 @@ a{color:#1976d2;text-decoration:none}
                 self._handle_wechat_login_status()
             elif self.path.startswith("/api/wechat/login"):
                 self._handle_wechat_login()
+            elif self.path.startswith("/api/accounts/"):
+                self._handle_accounts_post()
             elif self.path.startswith("/api/"):
                 self._proxy_request("POST")
             else:
@@ -289,8 +309,21 @@ a{color:#1976d2;text-decoration:none}
 
     def do_DELETE(self):
         try:
-            if self.path.startswith("/api/"):
+            if self.path.startswith("/api/accounts/"):
+                self._handle_accounts_delete()
+            elif self.path.startswith("/api/"):
                 self._proxy_request("DELETE")
+            else:
+                self.send_error(405)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_PUT(self):
+        try:
+            if self.path.startswith("/api/accounts/"):
+                self._handle_accounts_put()
+            elif self.path.startswith("/api/"):
+                self._proxy_request("PUT")
             else:
                 self.send_error(405)
         except (BrokenPipeError, ConnectionResetError):
@@ -613,15 +646,109 @@ def _handle_wechat_login_status(self):
                     cfg = _read_stored_config()
                     if "channels" not in cfg:
                         cfg["channels"] = {}
-                    if "personal_wechat" not in cfg["channels"]:
-                        cfg["channels"]["personal_wechat"] = {"enabled": True}
-                    cfg["channels"]["personal_wechat"]["credentials"] = {
-                        "token": result.token,
-                        "user_id": result.user_id,
-                        "base_url": result.base_url,
-                        "account_id": result.account_id or "default",
-                        "get_updates_buf": "",
-                    }
+                    ch_cfg = cfg["channels"]
+
+                    # Determine if this is a multi-account addition
+                    is_add = login_state.get("is_add_account", False)
+                    account_label = login_state.get("account_label")
+
+                    if is_add:
+                        # Multi-account mode: ensure personal_wechat is a list
+                        existing = ch_cfg.get("personal_wechat", [])
+                        if isinstance(existing, dict):
+                            # Convert single dict format to list, preserving existing
+                            existing_id = existing.get("id", existing.get("credentials", {}).get("account_id", "default"))
+                            existing = [{"id": existing_id, **existing}] if existing.get("credentials") else []
+                        elif not isinstance(existing, list):
+                            existing = []
+
+                        # Check for duplicate account_id in existing list
+                        dup = False
+                        for acct in existing:
+                            creds = acct.get("credentials", {})
+                            if creds.get("account_id") == result.account_id:
+                                # Update existing credentials instead of duplicating
+                                acct["credentials"] = {
+                                    "token": result.token,
+                                    "user_id": result.user_id,
+                                    "base_url": result.base_url,
+                                    "account_id": result.account_id or "default",
+                                    "get_updates_buf": "",
+                                }
+                                acct["enabled"] = True
+                                dup = True
+                                _LOGGER.info("Updated existing account credentials: %s", result.account_id)
+                                break
+
+                        if not dup:
+                            import uuid
+                            account_id = f"wx_{uuid.uuid4().hex[:8]}"
+                            existing.append({
+                                "id": account_id,
+                                "label": account_label or f"个人微信 {result.account_id[:8]}",
+                                "enabled": True,
+                                "show_reasoning": True,
+                                "credentials": {
+                                    "token": result.token,
+                                    "user_id": result.user_id,
+                                    "base_url": result.base_url,
+                                    "account_id": result.account_id or "default",
+                                    "get_updates_buf": "",
+                                },
+                            })
+                            _LOGGER.info("Added new WeChat account: %s (%s)", account_id, result.account_id)
+
+                        ch_cfg["personal_wechat"] = existing
+                    else:
+                        # Legacy single-account mode or first-time setup
+                        existing = ch_cfg.get("personal_wechat", {})
+                        if isinstance(existing, list):
+                            # Already in list format, find or create entry
+                            found = False
+                            for acct in existing:
+                                creds = acct.get("credentials", {})
+                                if creds.get("account_id") == result.account_id:
+                                    acct["credentials"] = {
+                                        "token": result.token,
+                                        "user_id": result.user_id,
+                                        "base_url": result.base_url,
+                                        "account_id": result.account_id or "default",
+                                        "get_updates_buf": "",
+                                    }
+                                    acct["enabled"] = True
+                                    found = True
+                                    break
+                            if not found:
+                                import uuid
+                                existing.append({
+                                    "id": f"wx_{uuid.uuid4().hex[:8]}",
+                                    "label": f"个人微信 {result.account_id[:8]}",
+                                    "enabled": True,
+                                    "show_reasoning": True,
+                                    "credentials": {
+                                        "token": result.token,
+                                        "user_id": result.user_id,
+                                        "base_url": result.base_url,
+                                        "account_id": result.account_id or "default",
+                                        "get_updates_buf": "",
+                                    },
+                                })
+                            ch_cfg["personal_wechat"] = existing
+                        else:
+                            # Single dict format → set/update credentials
+                            ch_cfg["personal_wechat"] = {
+                                "id": "default",
+                                "enabled": True,
+                                "show_reasoning": True,
+                                "credentials": {
+                                    "token": result.token,
+                                    "user_id": result.user_id,
+                                    "base_url": result.base_url,
+                                    "account_id": result.account_id or "default",
+                                    "get_updates_buf": "",
+                                },
+                            }
+
                     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                         json.dump(cfg, f, indent=2, ensure_ascii=False)
                     _LOGGER.info("WeChat credentials persisted to %s", CONFIG_FILE)
@@ -674,18 +801,673 @@ def _read_stored_config() -> dict:
         return {"channels": {}}
 
 
+def _mask_secrets(obj: Any) -> Any:
+    """Recursively mask secret fields in config dicts/lists."""
+    if isinstance(obj, dict):
+        return {
+            k: ("********" if (any(s in k.lower() for s in _SECRET_KEYS) and v) else _mask_secrets(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_mask_secrets(item) for item in obj]
+    return obj
+
+
 def _mask_channels(channels: dict) -> dict:
     """Mask secret fields so they are never sent back in plaintext."""
-    out: dict = {}
-    for name, ch in (channels or {}).items():
-        if isinstance(ch, dict):
-            out[name] = {
-                k: ("********" if (any(s in k.lower() for s in _SECRET_KEYS) and v) else v)
-                for k, v in ch.items()
-            }
+    return _mask_secrets(channels)
+
+
+def _ensure_accounts_list(channels: dict, ch_type: str) -> list[dict]:
+    """Normalize channel config to list-of-accounts format.
+
+    - dict → list (wrap single account)
+    - list → list (already multi-account)
+    - missing/empty → []
+    """
+    cfg = channels.get(ch_type, {})
+    if isinstance(cfg, list):
+        return cfg
+    if isinstance(cfg, dict):
+        if cfg:
+            account_id = cfg.get("id", cfg.get("credentials", {}).get("account_id", "default"))
+            return [{"id": account_id, **cfg}]
+        return []
+    return []
+
+
+def _save_multi_account_config(accounts: list[dict], ch_type: str) -> bool:
+    """Save accounts list for a channel type to config file + reload."""
+    stored = _read_stored_config()
+    if "channels" not in stored:
+        stored["channels"] = {}
+    stored["channels"][ch_type] = accounts
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(stored, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        _LOGGER.error("Failed to save config: %s", e)
+        return False
+    # Reload channels at runtime
+    _reload_channels(stored)
+    return True
+
+
+def _handle_accounts_list(self) -> None:
+    """GET /api/accounts — list all accounts with connection status."""
+    stored = _read_stored_config()
+    channels = stored.get("channels", {})
+    manager = _get_channel_manager()
+    status = manager.get_status() if manager else {}
+
+    # Normalize to flat list of account entries
+    accounts = []
+    for ch_type in ("feishu", "wechat", "personal_wechat"):
+        # Get config
+        raw = channels.get(ch_type, {})
+        if isinstance(raw, dict) and raw:
+            # Single account format
+            entries = [{"id": raw.get("id", "default"), **raw}]
+        elif isinstance(raw, list):
+            entries = raw
         else:
-            out[name] = ch
-    return out
+            entries = []
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            aid = entry.get("id", "default")
+            label = entry.get("label") or _channel_type_label(ch_type)
+            ch_status = status.get(f"{ch_type}_{aid}") or status.get(ch_type, {})
+            accounts.append({
+                "type": ch_type,
+                "id": aid,
+                "label": label,
+                "enabled": bool(entry.get("enabled", False)),
+                "show_reasoning": bool(entry.get("show_reasoning", True)),
+                "has_credentials": bool(entry.get("credentials")) or bool(entry.get("token")),
+                "status": ch_status.get("status", "disconnected"),
+                "connected": bool(ch_status.get("connected", False)),
+            })
+
+    self._send_json(200, {"accounts": accounts})
+
+
+def _channel_type_label(ch_type: str) -> str:
+    labels = {"feishu": "飞书", "wechat": "企业微信", "personal_wechat": "个人微信"}
+    return labels.get(ch_type, ch_type)
+
+
+def _handle_accounts_post(self) -> None:
+    """POST /api/accounts/{type} — add a new account.
+
+    For personal_wechat, starts QR login and returns session.
+    For other types, expects full config in body.
+    """
+    # Parse path: /api/accounts/personal_wechat  →  ch_type = "personal_wechat"
+    path = self.path.rstrip("/")
+    parts = path.split("/")
+    if len(parts) < 4:
+        self._send_json(400, {"error": "Invalid path"})
+        return
+    ch_type = parts[3]
+
+    if ch_type not in ("personal_wechat", "wechat", "feishu"):
+        self._send_json(400, {"error": f"Unsupported channel type: {ch_type}"})
+        return
+
+    try:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
+
+    if ch_type == "personal_wechat":
+        # Start QR login for a new WeChat account
+        self._handle_add_personal_wechat(data)
+    elif ch_type == "wechat":
+        # Add WeChat Work account with provided config
+        self._handle_add_wechat_work(data)
+    elif ch_type == "feishu":
+        self._send_json(400, {"error": "飞书目前仅支持单账号，请通过设置页面配置"})
+    else:
+        self._send_json(400, {"error": f"Unsupported: {ch_type}"})
+
+
+def _handle_add_personal_wechat(self, data: dict) -> None:
+    """Start QR login for adding a new personal WeChat account."""
+    label = str(data.get("label", "")) or None
+    try:
+        sys.path.insert(0, WEBUI_DIR)
+        from wechat_personal import PersonalWeChatClient
+
+        # Create a temporary client to start login
+        client = PersonalWeChatClient(
+            on_message=lambda msg: asyncio.sleep(0),
+        )
+
+        async def do_login():
+            login_session = await client.start_login()
+            return login_session
+
+        loop = asyncio.new_event_loop()
+        try:
+            login_session = loop.run_until_complete(do_login())
+        finally:
+            loop.close()
+
+        session_key = login_session.session_key
+
+        # Store login state (new format: includes label for multi-account)
+        _login_states[session_key] = {
+            "qrcode": login_session.qrcode,
+            "qrcode_url": login_session.qrcode_url,
+            "status": "waiting",
+            "client": client,
+            "account_label": label,
+            "is_add_account": True,
+        }
+
+        response = json.dumps({
+            "session_key": session_key,
+            "qrcode": login_session.qrcode,
+            "qrcode_url": login_session.qrcode_url,
+        })
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response.encode())
+
+    except Exception as e:
+        _LOGGER.error("WeChat add account login error: %s", e)
+        self._send_json(500, {"error": str(e)})
+
+
+def _handle_add_wechat_work(self, data: dict) -> None:
+    """Add a new WeChat Work account."""
+    corp_id = (data.get("corp_id") or "").strip()
+    agent_id = (data.get("agent_id") or "").strip()
+    secret = (data.get("secret") or "").strip()
+    token = (data.get("token") or "").strip()
+    encoding_aes_key = (data.get("encoding_aes_key") or "").strip()
+    label = (data.get("label") or "").strip() or f"企业微信 {agent_id}"
+    enabled = bool(data.get("enabled", True))
+
+    if not corp_id or not agent_id or not secret:
+        self._send_json(400, {"error": "缺少必要参数: corp_id, agent_id, secret"})
+        return
+
+    import uuid
+    account_id = f"ww_{uuid.uuid4().hex[:8]}"
+
+    accounts = _ensure_accounts_list(_read_stored_config().get("channels", {}), "wechat")
+    accounts.append({
+        "id": account_id,
+        "label": label,
+        "enabled": enabled,
+        "corp_id": corp_id,
+        "agent_id": agent_id,
+        "secret": secret,
+        "token": token,
+        "encoding_aes_key": encoding_aes_key,
+        "show_reasoning": True,
+    })
+
+    if _save_multi_account_config(accounts, "wechat"):
+        self._send_json(200, {
+            "success": True,
+            "account": {"type": "wechat", "id": account_id, "label": label},
+        })
+    else:
+        self._send_json(500, {"error": "保存配置失败"})
+
+
+def _handle_accounts_delete(self) -> None:
+    """DELETE /api/accounts/{type}/{id} — remove an account."""
+    path = self.path.rstrip("/")
+    parts = path.split("/")
+    if len(parts) < 5:
+        self._send_json(400, {"error": "Invalid path"})
+        return
+    ch_type = parts[3]
+    account_id = parts[4]
+
+    if ch_type not in ("personal_wechat", "wechat", "feishu"):
+        self._send_json(400, {"error": f"Unsupported: {ch_type}"})
+        return
+
+    if ch_type == "feishu":
+        self._send_json(400, {"error": "飞书目前仅支持单账号"})
+        return
+
+    stored = _read_stored_config()
+    channels = stored.get("channels", {})
+    accounts = _ensure_accounts_list(channels, ch_type)
+
+    # Filter out the target account
+    new_accounts = [a for a in accounts if a.get("id") != account_id]
+
+    if len(new_accounts) == len(accounts):
+        self._send_json(404, {"error": f"Account {account_id} not found"})
+        return
+
+    if _save_multi_account_config(new_accounts, ch_type):
+        _LOGGER.info("Removed account %s/%s, %d remaining", ch_type, account_id, len(new_accounts))
+        self._send_json(200, {"success": True})
+    else:
+        self._send_json(500, {"error": "保存配置失败"})
+
+
+def _handle_accounts_put(self) -> None:
+    """PUT /api/accounts/{type}/{id} — update account settings."""
+    path = self.path.rstrip("/")
+    parts = path.split("/")
+    if len(parts) < 5:
+        self._send_json(400, {"error": "Invalid path"})
+        return
+    ch_type = parts[3]
+    account_id = parts[4]
+
+    try:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        updates = json.loads(raw) if raw else {}
+    except Exception as e:
+        self._send_json(400, {"error": f"解析失败: {e}"})
+        return
+
+    stored = _read_stored_config()
+    channels = stored.get("channels", {})
+    accounts = _ensure_accounts_list(channels, ch_type)
+
+    found = False
+    for account in accounts:
+        if account.get("id") == account_id:
+            # Update allowed fields
+            for field in ("enabled", "show_reasoning", "label", "corp_id", "agent_id",
+                          "secret", "token", "encoding_aes_key"):
+                if field in updates:
+                    account[field] = updates[field]
+            found = True
+            break
+
+    if not found:
+        self._send_json(404, {"error": f"Account {account_id} not found"})
+        return
+
+    if _save_multi_account_config(accounts, ch_type):
+        self._send_json(200, {"success": True})
+    else:
+        self._send_json(500, {"error": "保存配置失败"})
+
+
+def _serve_accounts_page(self) -> None:
+    """Serve the multi-account management HTML page."""
+    page_path = os.path.join(WEBUI_DIR, "accounts.html")
+    # Fallback to inline page if file doesn't exist
+    if os.path.isfile(page_path):
+        self.path = "/accounts.html"
+        super().do_GET()
+        return
+
+    # Inline multi-account management page
+    self.send_response(200)
+    self.send_header("Content-Type", "text/html; charset=utf-8")
+    self.send_header("Cache-Control", "no-cache")
+    self.end_headers()
+    self.wfile.write(_build_accounts_page_html().encode("utf-8"))
+
+
+def _build_accounts_page_html() -> str:
+    """Build the multi-account management HTML page (inline fallback)."""
+    return """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多账号管理 - MiMo Code</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f5f5f5;font-family:system-ui,sans-serif;padding:24px;max-width:800px;margin:0 auto;color:#333}
+h1{font-size:20px;margin-bottom:8px;color:#1a1a1a}
+h2{font-size:16px;margin-bottom:12px;color:#333;display:flex;align-items:center;gap:8px}
+.subtitle{font-size:13px;color:#888;margin-bottom:20px}
+.card{background:#fff;border:1px solid #e0e0e0;border-radius:10px;padding:16px;margin-bottom:16px}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.badge-connected{background:#e8f5e9;color:#2e7d32}
+.badge-disconnected{background:#f5f5f5;color:#999}
+.badge-pending{background:#fff3e0;color:#e65100}
+.badge-error{background:#ffebee;color:#c62828}
+.badge-session_expired{background:#fce4ec;color:#ad1457}
+.account-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f0f0f0}
+.account-row:last-child{border-bottom:none}
+.account-info{flex:1}
+.account-name{font-size:14px;font-weight:500;margin-bottom:2px}
+.account-type{font-size:12px;color:#888}
+.account-actions{display:flex;gap:8px;align-items:center}
+.btn{padding:6px 14px;border:none;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.btn-primary{background:#1976d2;color:#fff}
+.btn-primary:hover{background:#1565c0}
+.btn-danger{background:#ef5350;color:#fff}
+.btn-danger:hover{background:#d32f2f}
+.btn-outline{background:transparent;border:1px solid #ddd;color:#666}
+.btn-outline:hover{background:#f5f5f5;border-color:#ccc}
+.btn-sm{padding:4px 10px;font-size:11px}
+.toggle{position:relative;display:inline-block;width:36px;height:20px;margin:0}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;transition:.3s;border-radius:20px}
+.slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:#fff;transition:.3s;border-radius:50%}
+.toggle input:checked+.slider{background:#1976d2}
+.toggle input:checked+.slider:before{transform:translateX(16px)}
+.empty-state{text-align:center;padding:32px 16px;color:#999}
+.empty-state p{font-size:13px;margin-bottom:12px}
+.loading{text-align:center;padding:32px;color:#888;font-size:14px}
+.qr-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center}
+.qr-modal.show{display:flex}
+.qr-modal-content{background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:360px;width:90%}
+.qr-modal-content h3{font-size:16px;margin-bottom:8px}
+.qr-modal-content p{font-size:12px;color:#888;margin-bottom:16px}
+.qr-modal-content img{max-width:280px;border:1px solid #eee;border-radius:8px;margin-bottom:12px}
+.qr-modal-content .status-text{font-size:13px;color:#e65100;margin-bottom:8px}
+.back-link{display:inline-block;margin-bottom:20px;color:#1976d2;text-decoration:none;font-size:13px}
+.back-link:hover{text-decoration:underline}
+.label-input{width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;margin-bottom:12px}
+.label-input:focus{outline:none;border-color:#1976d2}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:12px;color:#666;margin-bottom:4px}
+.form-group input{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.form-group input:focus{outline:none;border-color:#1976d2}
+.account-label-icon{font-size:16px;margin-right:4px}
+</style>
+</head>
+<body>
+<h1>多账号管理</h1>
+<p class="subtitle">管理所有 IM 通道的多个账号</p>
+<a href="/" class="back-link">← 返回主面板</a>
+
+<div id="accounts-loading" class="loading">加载中...</div>
+<div id="accounts-content" style="display:none"></div>
+
+<div id="qr-modal" class="qr-modal">
+  <div class="qr-modal-content">
+    <h3>添加个人微信</h3>
+    <p>请使用微信扫描二维码登录</p>
+    <div id="qrcode-container"><img id="qrcode-img" src="" alt="QR Code"/></div>
+    <div id="qr-status" class="status-text">等待扫码...</div>
+    <button class="btn btn-outline" onclick="closeQRModal()">取消</button>
+  </div>
+</div>
+
+<div id="add-wechat-modal" class="qr-modal">
+  <div class="qr-modal-content" style="text-align:left;max-width:400px">
+    <h3 style="text-align:center;margin-bottom:16px">添加企业微信</h3>
+    <div class="form-group">
+      <label>企业 ID (corp_id)</label>
+      <input id="ww-corp-id" type="text" placeholder="wx..."/>
+    </div>
+    <div class="form-group">
+      <label>应用 Agent ID</label>
+      <input id="ww-agent-id" type="text" placeholder="1000001"/>
+    </div>
+    <div class="form-group">
+      <label>应用 Secret</label>
+      <input id="ww-secret" type="password" placeholder="..."/>
+    </div>
+    <div class="form-group">
+      <label>Token (可选)</label>
+      <input id="ww-token" type="text" placeholder="..."/>
+    </div>
+    <div class="form-group">
+      <label>Encoding AES Key (可选)</label>
+      <input id="ww-aes-key" type="text" placeholder="..."/>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:center">
+      <button class="btn btn-primary" onclick="submitWechatWork()">添加</button>
+      <button class="btn btn-outline" onclick="closeWechatWorkModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CHANNEL_LABELS = {feishu:'飞书', wechat:'企业微信', personal_wechat:'个人微信'};
+const CHANNEL_ICONS = {feishu:'📘', wechat:'🏢', personal_wechat:'💬'};
+
+async function loadAccounts() {
+  document.getElementById('accounts-loading').style.display = 'block';
+  document.getElementById('accounts-content').style.display = 'none';
+  try {
+    const resp = await fetch('/api/accounts');
+    const data = await resp.json();
+    renderAccounts(data.accounts || []);
+  } catch(e) {
+    document.getElementById('accounts-loading').innerHTML = '加载失败: ' + e.message;
+  }
+}
+
+function renderAccounts(accounts) {
+  document.getElementById('accounts-loading').style.display = 'none';
+  const container = document.getElementById('accounts-content');
+  container.style.display = 'block';
+
+  // Group by channel type
+  const grouped = {};
+  for (const a of accounts) {
+    if (!grouped[a.type]) grouped[a.type] = [];
+    grouped[a.type].push(a);
+  }
+
+  const order = ['feishu', 'wechat', 'personal_wechat'];
+
+  let html = '';
+  for (const chType of order) {
+    const list = grouped[chType] || [];
+    const icon = CHANNEL_ICONS[chType] || '📡';
+    const label = CHANNEL_LABELS[chType] || chType;
+    const canAdd = chType === 'personal_wechat' || chType === 'wechat';
+    const isSingle = chType === 'feishu';
+
+    html += '<div class="card">';
+    html += '<div class="card-header">';
+    html += '<h2>' + icon + ' ' + label + '</h2>';
+    html += '<div>';
+    if (canAdd) {
+      html += '<button class="btn btn-primary btn-sm" onclick="addAccount(\'' + chType + '\')">+ 添加账号</button>';
+    }
+    html += '</div></div>';
+
+    if (list.length === 0) {
+      html += '<div class="empty-state"><p>暂无账号配置</p>';
+      if (canAdd) {
+        html += '<button class="btn btn-outline" onclick="addAccount(\'' + chType + '\')">添加账号</button>';
+      }
+      html += '</div>';
+    } else {
+      for (const acct of list) {
+        const statusClass = acct.connected ? 'badge-connected' : (acct.status === 'pending_login' ? 'badge-pending' : (acct.status === 'error' ? 'badge-error' : (acct.status === 'session_expired' ? 'badge-session_expired' : 'badge-disconnected')));
+        const statusText = acct.connected ? '已连接' : (acct.status === 'pending_login' ? '待登录' : (acct.status === 'session_expired' ? '会话过期' : (acct.status === 'error' ? '错误' : '未连接')));
+        const displayName = acct.label || acct.id || '默认';
+
+        html += '<div class="account-row">';
+        html += '<div class="account-info">';
+        html += '<div class="account-name">' + displayName + '<span class="badge ' + statusClass + '" style="margin-left:8px">' + statusText + '</span></div>';
+        html += '<div class="account-type">ID: ' + acct.id + (acct.has_credentials ? ' • 已认证' : ' • 未认证') + '</div>';
+        html += '</div>';
+        html += '<div class="account-actions">';
+
+        if (!isSingle) {
+          // Toggle enabled
+          html += '<label class="toggle"><input type="checkbox" ' + (acct.enabled ? 'checked' : '') + ' onchange="toggleAccount(\'' + chType + '\',\'' + acct.id + '\',this.checked)"/><span class="slider"></span></label>';
+          // Delete
+          html += '<button class="btn btn-danger btn-sm" onclick="deleteAccount(\'' + chType + '\',\'' + acct.id + '\',\'' + displayName.replace(/'/g,"\\'") + '\')">删除</button>';
+        }
+
+        html += '</div></div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+async function toggleAccount(type, id, enabled) {
+  try {
+    await fetch('/api/accounts/' + type + '/' + id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: enabled}),
+    });
+    // Reload after a short delay for channel manager to restart
+    setTimeout(loadAccounts, 1000);
+  } catch(e) {
+    alert('操作失败: ' + e.message);
+  }
+}
+
+async function deleteAccount(type, id, name) {
+  if (!confirm('确定要删除账号 "' + name + '" 吗？')) return;
+  try {
+    const resp = await fetch('/api/accounts/' + type + '/' + id, {method: 'DELETE'});
+    const data = await resp.json();
+    if (data.success) {
+      setTimeout(loadAccounts, 1500);
+    } else {
+      alert('删除失败: ' + (data.error || '未知错误'));
+    }
+  } catch(e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+let addAccountType = '';
+let qrSessionKey = '';
+let qrPollTimer = null;
+
+function addAccount(type) {
+  addAccountType = type;
+  if (type === 'personal_wechat') {
+    startPersonalWechatAdd();
+  } else if (type === 'wechat') {
+    document.getElementById('add-wechat-modal').classList.add('show');
+  }
+}
+
+function closeWechatWorkModal() {
+  document.getElementById('add-wechat-modal').classList.remove('show');
+}
+
+async function submitWechatWork() {
+  const data = {
+    corp_id: document.getElementById('ww-corp-id').value.trim(),
+    agent_id: document.getElementById('ww-agent-id').value.trim(),
+    secret: document.getElementById('ww-secret').value.trim(),
+    token: document.getElementById('ww-token').value.trim(),
+    encoding_aes_key: document.getElementById('ww-aes-key').value.trim(),
+    enabled: true,
+  };
+  if (!data.corp_id || !data.agent_id || !data.secret) {
+    alert('请填写企业 ID、Agent ID 和 Secret');
+    return;
+  }
+  try {
+    const resp = await fetch('/api/accounts/wechat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    const result = await resp.json();
+    if (result.success) {
+      alert('企业微信账号已添加，正在重新加载通道...');
+      closeWechatWorkModal();
+      setTimeout(loadAccounts, 2000);
+    } else {
+      alert('添加失败: ' + (result.error || '未知错误'));
+    }
+  } catch(e) {
+    alert('添加失败: ' + e.message);
+  }
+}
+
+async function startPersonalWechatAdd() {
+  try {
+    const resp = await fetch('/api/accounts/personal_wechat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({label: '个人微信 ' + new Date().toLocaleDateString()}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      alert('启动登录失败: ' + data.error);
+      return;
+    }
+
+    qrSessionKey = data.session_key;
+
+    // Show QR modal
+    const modal = document.getElementById('qr-modal');
+    document.getElementById('qrcode-img').src = data.qrcode_url || 'data:image/png;base64,' + data.qrcode;
+    document.getElementById('qr-status').textContent = '等待扫码...';
+    modal.classList.add('show');
+
+    // Start polling
+    startQRPolling();
+  } catch(e) {
+    alert('启动登录失败: ' + e.message);
+  }
+}
+
+function startQRPolling() {
+  if (qrPollTimer) clearInterval(qrPollTimer);
+
+  qrPollTimer = setInterval(async () => {
+    try {
+      const resp = await fetch('/api/wechat/login/status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_key: qrSessionKey}),
+      });
+      const data = await resp.json();
+
+      if (data.status === 'success') {
+        clearInterval(qrPollTimer);
+        qrPollTimer = null;
+        document.getElementById('qr-status').textContent = '登录成功！账号已添加';
+        document.getElementById('qr-status').style.color = '#2e7d32';
+        setTimeout(() => {
+          closeQRModal();
+          loadAccounts();
+        }, 1500);
+      } else if (data.status === 'expired') {
+        clearInterval(qrPollTimer);
+        qrPollTimer = null;
+        document.getElementById('qr-status').textContent = '二维码已过期，请刷新页面重试';
+        document.getElementById('qr-status').style.color = '#c62828';
+      } else {
+        document.getElementById('qr-status').textContent = '等待扫码...';
+      }
+    } catch(e) {
+      console.error('QR poll error:', e);
+    }
+  }, 2000);
+}
+
+function closeQRModal() {
+  document.getElementById('qr-modal').classList.remove('show');
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer);
+    qrPollTimer = null;
+  }
+}
+
+// Initial load
+loadAccounts();
+</script>
+</body>
+</html>"""
+
 
 
 def _handle_channels_status(self) -> None:
@@ -902,7 +1684,7 @@ def _handle_fs_write(self) -> None:
         self._send_json(500, {"error": str(e)})
 
 
-# Bind channel/wechat handler functions as instance methods of MiMoProxyHandler.
+# Bind handler functions as instance methods of MiMoProxyHandler.
 # They are defined as module-level functions (for readability) but are dispatched
 # via self._handle_* in do_GET/do_POST, so they must be attached to the class.
 MiMoProxyHandler._handle_wechat_login = _handle_wechat_login
@@ -912,6 +1694,15 @@ MiMoProxyHandler._handle_channels_get = _handle_channels_get
 MiMoProxyHandler._handle_channels_post = _handle_channels_post
 MiMoProxyHandler._handle_feishu_test = _handle_feishu_test
 MiMoProxyHandler._send_json = _send_json
+
+# Multi-account management handlers
+MiMoProxyHandler._handle_accounts_list = _handle_accounts_list
+MiMoProxyHandler._handle_accounts_post = _handle_accounts_post
+MiMoProxyHandler._handle_accounts_delete = _handle_accounts_delete
+MiMoProxyHandler._handle_accounts_put = _handle_accounts_put
+MiMoProxyHandler._handle_add_personal_wechat = _handle_add_personal_wechat
+MiMoProxyHandler._handle_add_wechat_work = _handle_add_wechat_work
+MiMoProxyHandler._serve_accounts_page = _serve_accounts_page
 
 
 if __name__ == "__main__":

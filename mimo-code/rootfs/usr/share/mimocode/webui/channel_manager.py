@@ -234,11 +234,35 @@ class ChannelManager:
         try:
             loop = asyncio.get_event_loop()
             cfg = await loop.run_in_executor(None, self._read_config_file)
-            if "personal_wechat" not in cfg.setdefault("channels", {}):
-                cfg["channels"]["personal_wechat"] = {"enabled": True}
-            if "credentials" not in cfg["channels"]["personal_wechat"]:
-                cfg["channels"]["personal_wechat"]["credentials"] = {}
-            cfg["channels"]["personal_wechat"]["credentials"]["get_updates_buf"] = new_buf
+            ch_cfg = cfg.setdefault("channels", {})
+
+            # Handle both dict and list formats for personal_wechat
+            existing = ch_cfg.get("personal_wechat", {})
+            if isinstance(existing, list):
+                # Multi-account list format — update first account's buf or all
+                # (caller should provide account_id context eventually)
+                for acct in existing:
+                    creds = acct.setdefault("credentials", {})
+                    if "get_updates_buf" in creds or not any(
+                        a.get("credentials", {}).get("get_updates_buf")
+                        for a in existing
+                    ):
+                        creds["get_updates_buf"] = new_buf
+                        break
+                else:
+                    # No account has get_updates_buf yet — update first enabled
+                    for acct in existing:
+                        if acct.get("enabled", False):
+                            acct.setdefault("credentials", {})["get_updates_buf"] = new_buf
+                            break
+            elif isinstance(existing, dict):
+                # Single dict format
+                if "credentials" not in existing:
+                    existing["credentials"] = {}
+                existing["credentials"]["get_updates_buf"] = new_buf
+            else:
+                ch_cfg["personal_wechat"] = {"enabled": True, "credentials": {"get_updates_buf": new_buf}}
+
             await loop.run_in_executor(None, self._write_config_file, cfg)
         except Exception as e:
             _LOGGER.warning("Failed to persist sync_buf: %s", e)

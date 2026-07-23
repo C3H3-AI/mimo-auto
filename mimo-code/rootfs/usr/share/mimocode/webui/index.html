@@ -7,8 +7,29 @@
     <title>MiMo Code</title>
     <script type="module" crossorigin src="./assets/index-BFX8fupw.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-hWJc-JDA.css">
+    <style>
+      /* Multi-account nav button — sits above the SPA root */
+      #multi-account-nav {
+        position: fixed; top: 0; right: 0; z-index: 9999;
+        display: flex; align-items: center; gap: 4px;
+        padding: 4px 10px; margin: 6px;
+        background: rgba(25,118,210,0.9); color: #fff;
+        border-radius: 16px; font-size: 11px;
+        cursor: pointer; text-decoration: none;
+        transition: background 0.2s;
+        font-family: system-ui, sans-serif;
+        line-height: 1.4;
+      }
+      #multi-account-nav:hover { background: #1976d2; }
+      #multi-account-nav .icon { font-size: 13px; }
+      /* Push SPA content down to avoid overlap */
+      #root { padding-top: 0; }
+    </style>
   </head>
   <body class="m-0 p-0">
+    <a id="multi-account-nav" href="/accounts/" title="多账号管理">
+      <span class="icon">👤</span> 多账号
+    </a>
     <div id="root"></div>
   </body>
 </html>

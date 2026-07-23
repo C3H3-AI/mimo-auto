@@ -92,6 +92,16 @@ class FeishuClient:
     def last_error(self) -> str | None:
         return self._last_error
 
+    def get_status(self) -> dict[str, Any]:
+        """Return channel status dict for the channel manager."""
+        return {
+            "type": "feishu",
+            "account_id": "default",
+            "connected": self._connected,
+            "status": self._status,
+            "error": self._last_error,
+        }
+
     # ------------------------------------------------------------------ #
     # Persistent session cache
     # ------------------------------------------------------------------ #

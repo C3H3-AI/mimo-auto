@@ -9,6 +9,15 @@
           "webui_url": "WebUI 地址（可选）",
           "use_supervisor": "通过 Supervisor 自动检测 Addon"
         }
+      },
+      "reconfigure": {
+        "title": "重新配置 MiMo Auto",
+        "description": "更新 MiMo Code Addon 的连接设置。",
+        "data": {
+          "server_url": "mimo serve 地址",
+          "webui_url": "WebUI 地址（可选）",
+          "use_supervisor": "通过 Supervisor 自动检测 Addon"
+        }
       }
     },
     "error": {
