@@ -1,5 +1,19 @@
 # Changelog
 
+## v5.0.1 (2026-07-23)
+
+### 修复
+
+- **集成重载失败** — `async_unload_entry` 正确调用 `async_unload_platforms`，解决 HA 重启/重载后实体不注册的问题
+- **语音助手空响应** — `_send_message` 请求体从 `{"message": ...}` 改为 `{"parts": [{"type": "text", "text": ...}]}`，匹配 Addon API 格式
+- **health check task 阻塞关闭** — coordinator.stop 在 unload 时正确取消 health check 任务
+
+### 改进
+
+- **传感器和对话实体显示** — 添加 DeviceInfo，关联到设备，在集成卡片中直接可见
+- **支持重新配置** — 添加 `async_step_reconfigure`，可在 UI 中修改 server_url 等设置
+- **补充 translations** — 添加 reconfigure 步骤的翻译（en/zh-Hans）
+
 ## v5.0.0 (2026-07-23)
 
 ### 🏗 架构重构 — Addon 桥接模式
