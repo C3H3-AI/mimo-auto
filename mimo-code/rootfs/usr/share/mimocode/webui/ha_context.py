@@ -92,7 +92,7 @@ class HAContextBuilder:
             session = await self._ensure_session()
             async with session.get(
                 f"{HA_URL}/api/states",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"X-Supervisor-Token": token},
             ) as resp:
                 if resp.status != 200:
                     _LOGGER.warning("HA API returned %d", resp.status)
