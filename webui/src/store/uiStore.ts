@@ -10,6 +10,7 @@ interface UiState {
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
   fileExplorerOpen: boolean;
+  devicePanelOpen: boolean;
 
   /* Actions */
   setThemeMode: (mode: ThemeMode) => void;
@@ -20,6 +21,8 @@ interface UiState {
   setCommandPaletteOpen: (open: boolean) => void;
   setFileExplorerOpen: (open: boolean) => void;
   toggleFileExplorer: () => void;
+  setDevicePanelOpen: (open: boolean) => void;
+  toggleDevicePanel: () => void;
 }
 
 function getStoredTheme(): ThemeMode {
@@ -65,6 +68,7 @@ export const useUiStore = create<UiState>((set) => {
     settingsOpen: false,
     commandPaletteOpen: false,
     fileExplorerOpen: false,
+    devicePanelOpen: false,
 
     setThemeMode: (mode: ThemeMode) => {
       localStorage.setItem("mimo-theme-mode", mode);
@@ -98,6 +102,14 @@ export const useUiStore = create<UiState>((set) => {
 
     toggleFileExplorer: () => {
       set((state) => ({ fileExplorerOpen: !state.fileExplorerOpen }));
+    },
+
+    setDevicePanelOpen: (open: boolean) => {
+      set({ devicePanelOpen: open });
+    },
+
+    toggleDevicePanel: () => {
+      set((state) => ({ devicePanelOpen: !state.devicePanelOpen }));
     },
   };
 });

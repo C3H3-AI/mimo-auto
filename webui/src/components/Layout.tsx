@@ -1,12 +1,14 @@
 import { Box, IconButton } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
+import DeviceHubIcon from "@mui/icons-material/DeviceHub";
 import { useUiStore } from "../store/uiStore";
 import { Sidebar } from "./Sidebar";
 import { ChatView } from "./ChatView";
 import { SettingsPanel } from "./SettingsPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileExplorer } from "./FileExplorer";
+import { DevicePanel } from "./DevicePanel";
 import { useKeyboard } from "../hooks/useKeyboard";
 
 export function Layout() {
@@ -14,6 +16,8 @@ export function Layout() {
   const setSidebarOpen = useUiStore((s) => s.setSidebarOpen);
   const fileExplorerOpen = useUiStore((s) => s.fileExplorerOpen);
   const setFileExplorerOpen = useUiStore((s) => s.setFileExplorerOpen);
+  const devicePanelOpen = useUiStore((s) => s.devicePanelOpen);
+  const setDevicePanelOpen = useUiStore((s) => s.setDevicePanelOpen);
 
   // Register keyboard shortcuts
   useKeyboard();
@@ -61,6 +65,14 @@ export function Layout() {
           <Box sx={{ flex: 1 }} />
           <IconButton
             size="small"
+            onClick={() => setDevicePanelOpen(!devicePanelOpen)}
+            sx={{ color: devicePanelOpen ? "primary.main" : "text.secondary" }}
+            title="Toggle device panel (Ctrl+D)"
+          >
+            <DeviceHubIcon fontSize="small" />
+          </IconButton>
+          <IconButton
+            size="small"
             onClick={() => setFileExplorerOpen(!fileExplorerOpen)}
             sx={{ color: fileExplorerOpen ? "primary.main" : "text.secondary" }}
             title="Toggle file explorer (Ctrl+E)"
@@ -80,6 +92,16 @@ export function Layout() {
           sx={{ width: 300, flexShrink: 0, overflow: "hidden" }}
         >
           <FileExplorer />
+        </Box>
+      )}
+
+      {/* Device Panel */}
+      {devicePanelOpen && (
+        <Box
+          className="border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+          sx={{ width: 320, flexShrink: 0, overflow: "hidden" }}
+        >
+          <DevicePanel />
         </Box>
       )}
 

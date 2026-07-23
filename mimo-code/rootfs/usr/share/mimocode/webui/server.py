@@ -233,6 +233,11 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 self._handle_accounts_list()
                 return
 
+            # ---- Device states API ----
+            if self.path.startswith("/api/devices"):
+                self._handle_devices()
+                return
+
             # ---- Filesystem API (bypasses mimo serve's dir restriction) ----
             if self.path.startswith("/api/fs/list"):
                 self._handle_fs_list()
@@ -315,6 +320,8 @@ a{color:#1976d2;text-decoration:none}
                 self._handle_wechat_login()
             elif self.path.startswith("/api/accounts/"):
                 self._handle_accounts_post()
+            elif self.path.startswith("/api/devices/control"):
+                self._handle_device_control()
             elif self.path.startswith("/api/"):
                 self._proxy_request("POST")
             else:
@@ -888,6 +895,111 @@ def _save_multi_account_config(accounts: list[dict], ch_type: str) -> bool:
     # Reload channels at runtime
     _reload_channels(stored)
     return True
+
+
+# ------------------------------------------------------------------ #
+# Device states and control API
+# ------------------------------------------------------------------ #
+
+def _get_ha_token() -> str:
+    """Get HA token from environment."""
+    import os
+    return os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN") or ""
+
+
+def _handle_devices(self) -> None:
+    """GET /api/devices — fetch device states from HA."""
+    token = _get_ha_token()
+    if not token:
+        self._send_json(401, {"error": "No HA token available"})
+        return
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "http://supervisor/core/api/states",
+            headers={"X-Supervisor-Token": token},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            states = json.loads(resp.read())
+
+        # Filter and format for frontend
+        devices = []
+        priority_domains = [
+            "light", "climate", "switch", "cover", "media_player",
+            "fan", "lock", "vacuum", "camera",
+        ]
+        for state in states:
+            eid = state.get("entity_id", "")
+            domain = eid.split(".")[0] if "." in eid else ""
+            if domain not in priority_domains:
+                continue
+            attrs = state.get("attributes", {})
+            devices.append({
+                "entity_id": eid,
+                "domain": domain,
+                "state": state.get("state", "unknown"),
+                "friendly_name": attrs.get("friendly_name", eid),
+                "brightness": attrs.get("brightness"),
+                "temperature": attrs.get("temperature"),
+                "current_temperature": attrs.get("current_temperature"),
+                "humidity": attrs.get("humidity"),
+                "hvac_mode": attrs.get("hvac_mode") or attrs.get("mode"),
+            })
+
+        self._send_json(200, {"devices": devices})
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
+
+
+def _handle_device_control(self) -> None:
+    """POST /api/devices/control — control a device via HA API."""
+    token = _get_ha_token()
+    if not token:
+        self._send_json(401, {"error": "No HA token available"})
+        return
+
+    try:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        data = json.loads(raw)
+    except Exception as e:
+        self._send_json(400, {"error": f"Invalid request: {e}"})
+        return
+
+    action = data.get("action", "")
+    entity_id = data.get("entity_id", "")
+
+    if not action or not entity_id:
+        self._send_json(400, {"error": "Missing action or entity_id"})
+        return
+
+    try:
+        import urllib.request
+        # Map action to HA service
+        service_map = {
+            "turn_on": ("homeassistant", "turn_on"),
+            "turn_off": ("homeassistant", "turn_off"),
+            "toggle": ("homeassistant", "toggle"),
+        }
+        if action not in service_map:
+            self._send_json(400, {"error": f"Unknown action: {action}"})
+            return
+
+        domain, service = service_map[action]
+        url = f"http://supervisor/core/api/services/{domain}/{service}"
+        body = json.dumps({"entity_id": entity_id}).encode()
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={
+                "X-Supervisor-Token": token,
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self._send_json(200, {"success": True, "action": action, "entity_id": entity_id})
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
 
 
 def _handle_accounts_list(self) -> None:
@@ -1806,6 +1918,10 @@ MiMoProxyHandler._serve_accounts_page = _serve_accounts_page
 MiMoProxyHandler._handle_fs_list = _handle_fs_list
 MiMoProxyHandler._handle_fs_read = _handle_fs_read
 MiMoProxyHandler._handle_fs_write = _handle_fs_write
+
+# Device handlers
+MiMoProxyHandler._handle_devices = _handle_devices
+MiMoProxyHandler._handle_device_control = _handle_device_control
 
 
 if __name__ == "__main__":
