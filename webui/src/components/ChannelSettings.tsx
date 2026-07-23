@@ -1,18 +1,20 @@
 /**
- * Channel Settings — multi-account with popup dialogs.
- * Personal WeChat: dialog shows QR → scan → name input → done.
- * Feishu/WeChat Work: dialog shows form fields.
+ * Channel Settings — unified "Add Account" button + grouped collapsible account list.
+ * All channel types in one flat view, grouped by type with collapsible sections.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  Box, Typography, TextField, Switch, FormControlLabel, Button, Divider,
-  Alert, CircularProgress, Card, CardContent, Tabs, Tab, Chip, IconButton,
-  Dialog, DialogTitle, DialogContent, DialogActions,
+  Box, Typography, TextField, Button, Divider, Alert, CircularProgress,
+  Card, CardContent, Chip, IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
+  Collapse, List, ListItem, ListItemText, ListItemSecondaryAction,
 } from "@mui/material";
-import SaveIcon from "@mui/icons-material/Save";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ChatIcon from "@mui/icons-material/Chat";
+import WorkIcon from "@mui/icons-material/Work";
+import PhoneAndroidIcon from "@mui/icons-material/PhoneAndroid";
 import QRCode from "qrcode.react";
 import { API_BASE_URL } from "../api/mimoClient";
 const C_API = API_BASE_URL;
@@ -22,12 +24,19 @@ interface AccountEntry {
   show_reasoning: boolean; has_credentials: boolean; status: string; connected: boolean;
 }
 
+const CHANNEL_TYPES = [
+  { type: "feishu" as const, label: "飞书", icon: <ChatIcon fontSize="small" /> },
+  { type: "wechat" as const, label: "企业微信", icon: <WorkIcon fontSize="small" /> },
+  { type: "personal_wechat" as const, label: "个人微信", icon: <PhoneAndroidIcon fontSize="small" /> },
+];
+
+const TYPE_LABELS: Record<string, string> = { feishu: "飞书", wechat: "企业微信", personal_wechat: "个人微信" };
+
 export function ChannelSettings() {
-  const [tab, setTab] = useState(0);
   const [accounts, setAccounts] = useState<AccountEntry[]>([]);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogType, setDialogType] = useState<"feishu" | "wechat" | "personal_wechat">("feishu");
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({ feishu: true, wechat: true, personal_wechat: true });
   const pollRef = useRef<number | null>(null);
 
   const loadAccounts = useCallback(async () => {
@@ -44,11 +53,6 @@ export function ChannelSettings() {
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
   }, [loadAccounts]);
 
-  const openAddDialog = (type: "feishu" | "wechat" | "personal_wechat") => {
-    setDialogType(type);
-    setDialogOpen(true);
-  };
-
   const deleteAccount = async (type: string, id: string) => {
     if (!window.confirm(`删除账号 ${id}？`)) return;
     try {
@@ -57,87 +61,90 @@ export function ChannelSettings() {
     } catch { /* ignore */ }
   };
 
-  const feishuList = accounts.filter((a) => a.type === "feishu");
-  const wechatList = accounts.filter((a) => a.type === "wechat");
-  const wxList = accounts.filter((a) => a.type === "personal_wechat");
+  const toggleExpand = (type: string) => setExpanded((p) => ({ ...p, [type]: !p[type] }));
+
+  // Group accounts by type
+  const grouped = CHANNEL_TYPES.map((ct) => ({
+    ...ct,
+    accounts: accounts.filter((a) => a.type === ct.type),
+  }));
 
   return (
     <Box sx={{ p: 2 }}>
-      <Typography variant="h6" gutterBottom>通道设置</Typography>
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label={`飞书 (${feishuList.length})`} />
-        <Tab label={`企业微信 (${wechatList.length})`} />
-        <Tab label={`个人微信 (${wxList.length})`} />
-      </Tabs>
-
       {message && <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
-      {tab === 0 && (
-        <Box>
-          {feishuList.map((acct) => (
-            <AccountCard key={acct.id} acct={acct} onDelete={() => deleteAccount("feishu", acct.id)} />
-          ))}
-          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => openAddDialog("feishu")}>添加飞书账号</Button>
-        </Box>
-      )}
+      {/* Grouped account list */}
+      {grouped.map((group) => (
+        <Card key={group.type} sx={{ mb: 2 }}>
+          <CardContent sx={{ pb: "8px !important" }}>
+            <Box sx={{ display: "flex", alignItems: "center", cursor: "pointer" }} onClick={() => toggleExpand(group.type)}>
+              {group.icon}
+              <Typography variant="subtitle1" fontWeight={600} sx={{ ml: 1, flex: 1 }}>
+                {group.label}
+              </Typography>
+              <Chip size="small" label={`${group.accounts.length} 个`} sx={{ mr: 1 }} />
+              {expanded[group.type] ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </Box>
+            <Collapse in={expanded[group.type]}>
+              <List dense disablePadding sx={{ mt: 1 }}>
+                {group.accounts.length === 0 ? (
+                  <ListItem>
+                    <ListItemText primary="暂无账号" primaryTypographyProps={{ color: "text.secondary", variant: "body2" }} />
+                  </ListItem>
+                ) : (
+                  group.accounts.map((acct) => (
+                    <ListItem key={acct.id} sx={{ py: 0.5 }}>
+                      <ListItemText
+                        primary={acct.label || acct.id}
+                        secondary={acct.id}
+                        primaryTypographyProps={{ variant: "body2", fontWeight: 500 }}
+                        secondaryTypographyProps={{ variant: "caption" }}
+                      />
+                      <ListItemSecondaryAction>
+                        <Chip size="small" label={acct.connected ? "已连接" : "未连接"} color={acct.connected ? "success" : "default"} sx={{ mr: 1 }} />
+                        <IconButton size="small" onClick={() => deleteAccount(acct.type, acct.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </ListItemSecondaryAction>
+                    </ListItem>
+                  ))
+                )}
+              </List>
+            </Collapse>
+          </CardContent>
+        </Card>
+      ))}
 
-      {tab === 1 && (
-        <Box>
-          {wechatList.map((acct) => (
-            <AccountCard key={acct.id} acct={acct} onDelete={() => deleteAccount("wechat", acct.id)} />
-          ))}
-          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => openAddDialog("wechat")}>添加企业微信账号</Button>
-        </Box>
-      )}
+      {/* Single Add Account button */}
+      <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddDialogOpen(true)} sx={{ mt: 1 }}>
+        添加账号
+      </Button>
 
-      {tab === 2 && (
-        <Box>
-          {wxList.map((acct) => (
-            <AccountCard key={acct.id} acct={acct} onDelete={() => deleteAccount("personal_wechat", acct.id)} />
-          ))}
-          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => openAddDialog("personal_wechat")}>添加微信账号</Button>
-        </Box>
-      )}
-
+      {/* Add Account Dialog — Step 1: Choose type */}
       <AddAccountDialog
-        open={dialogOpen} type={dialogType}
-        onClose={() => setDialogOpen(false)}
-        onAdded={() => { setDialogOpen(false); loadAccounts(); }}
+        open={addDialogOpen}
+        onClose={() => setAddDialogOpen(false)}
+        onAdded={() => { setAddDialogOpen(false); loadAccounts(); }}
         setMessage={setMessage}
       />
     </Box>
   );
 }
 
-function AccountCard({ acct, onDelete }: { acct: AccountEntry; onDelete: () => void }) {
-  return (
-    <Card sx={{ mb: 2 }}>
-      <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <Box>
-            <Typography variant="subtitle2" fontWeight={600}>{acct.label || acct.id}</Typography>
-            <Typography variant="caption" color="text.secondary">{acct.id}</Typography>
-          </Box>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Chip size="small" label={acct.connected ? "已连接" : "未连接"} color={acct.connected ? "success" : "default"} />
-            <IconButton size="small" onClick={onDelete}><DeleteIcon fontSize="small" /></IconButton>
-          </Box>
-        </Box>
-      </CardContent>
-    </Card>
-  );
-}
-
 function AddAccountDialog({
-  open, type, onClose, onAdded, setMessage,
+  open, onClose, onAdded, setMessage,
 }: {
   open: boolean;
-  type: "feishu" | "wechat" | "personal_wechat";
   onClose: () => void;
   onAdded: () => void;
   setMessage: (m: { type: "success" | "error"; text: string }) => void;
 }) {
+  const [step, setStep] = useState<"choose" | "form" | "restart">("choose");
+  const [selectedType, setSelectedType] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
+  // Form fields
   const [label, setLabel] = useState("");
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
@@ -147,45 +154,67 @@ function AddAccountDialog({
   const [token, setToken] = useState("");
   const [aesKey, setAesKey] = useState("");
 
-  // WeChat QR login states (stays in dialog)
+  // WeChat QR states
   const [qrState, setQrState] = useState<"idle" | "loading" | "qr" | "naming" | "done">("idle");
   const [qrCodeUrl, setQrCodeUrl] = useState("");
   const [sessionKey, setSessionKey] = useState("");
   const [wxAccountId, setWxAccountId] = useState("");
   const [wxAccountName, setWxAccountName] = useState("");
 
-  const title = type === "feishu" ? "添加飞书账号" : type === "wechat" ? "添加企业微信账号" : "添加微信账号";
-
-  const resetWxState = () => {
-    setQrState("idle");
-    setQrCodeUrl("");
-    setSessionKey("");
-    setWxAccountId("");
-    setWxAccountName("");
-    setLabel("");
+  const resetAll = () => {
+    setStep("choose");
+    setSelectedType("");
+    setLabel(""); setAppId(""); setAppSecret("");
+    setCorpId(""); setAgentId(""); setSecret(""); setToken(""); setAesKey("");
+    setQrState("idle"); setQrCodeUrl(""); setSessionKey("");
+    setWxAccountId(""); setWxAccountName("");
   };
 
-  const handleClose = () => {
-    resetWxState();
-    onClose();
+  const handleClose = () => { resetAll(); onClose(); };
+
+  const handleChooseType = (type: string) => {
+    setSelectedType(type);
+    setStep("form");
   };
 
-  // Start WeChat QR login
+  // ---- Feishu / WeChat Work submit ----
+  const handleSubmit = async () => {
+    setLoading(true);
+    try {
+      const body: any = { label: label || undefined, enabled: true };
+      if (selectedType === "feishu") {
+        body.app_id = appId; body.app_secret = appSecret;
+      } else {
+        body.corp_id = corpId; body.agent_id = agentId;
+        body.secret = secret; body.token = token; body.encoding_aes_key = aesKey;
+      }
+      const res = await fetch(`${C_API}/accounts/${selectedType}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success || data.account_id) {
+        setStep("restart");
+      } else {
+        setMessage({ type: "error", text: data.error || "添加失败" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "连接服务器失败" });
+    } finally { setLoading(false); }
+  };
+
+  // ---- WeChat QR login ----
   const startWxLogin = async () => {
     setQrState("loading");
     try {
       const res = await fetch(`${C_API}/accounts/personal_wechat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: label || undefined }),
       });
       const data = await res.json();
       if (data.qrcode) {
-        setQrCodeUrl(data.qrcode_url);
-        setSessionKey(data.session_key);
-        setQrState("qr");
-        // Start polling for scan result
-        pollWxScan(data.session_key);
+        setQrCodeUrl(data.qrcode_url); setSessionKey(data.session_key);
+        setQrState("qr"); pollWxScan(data.session_key);
       } else {
         setMessage({ type: "error", text: data.error || "获取二维码失败" });
         setQrState("idle");
@@ -196,191 +225,144 @@ function AddAccountDialog({
     }
   };
 
-  // Poll for scan confirmation (long poll)
   const pollWxScan = async (sk: string) => {
     try {
       const res = await fetch(`${C_API}/wechat/login/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_key: sk }),
       });
       const data = await res.json();
       if (data.status === "success") {
-        // Login success — show naming step
-        setWxAccountId(data.account_id || "");
-        setQrState("naming");
+        setWxAccountId(data.account_id || ""); setQrState("naming");
       } else if (data.status === "expired") {
-        setMessage({ type: "error", text: "二维码已过期" });
-        setQrState("idle");
+        setMessage({ type: "error", text: "二维码已过期" }); setQrState("idle");
       } else {
-        setMessage({ type: "error", text: data.message || "登录超时" });
-        setQrState("idle");
+        setMessage({ type: "error", text: data.message || "登录超时" }); setQrState("idle");
       }
     } catch {
-      setMessage({ type: "error", text: "连接失败" });
-      setQrState("idle");
+      setMessage({ type: "error", text: "连接失败" }); setQrState("idle");
     }
   };
 
-  // Submit name for WeChat account
   const submitWxName = async () => {
     setLoading(true);
     try {
-      // The account is already added by the backend during QR login
-      // Just update the label
       if (wxAccountId) {
         await fetch(`${C_API}/accounts/personal_wechat/${wxAccountId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ label: wxAccountName || label || wxAccountId }),
         });
       }
-      setMessage({ type: "success", text: `微信账号已添加：${wxAccountId}` });
-      setQrState("done");
-      setTimeout(() => { onAdded(); }, 1000);
-    } catch {
-      setMessage({ type: "error", text: "保存失败" });
-    } finally {
-      setLoading(false);
-    }
+      setQrState("done"); setStep("restart");
+    } catch { setMessage({ type: "error", text: "保存失败" }); }
+    finally { setLoading(false); }
   };
 
-  // Submit for Feishu / WeChat Work
-  const handleSubmit = async () => {
-    setLoading(true);
+  // ---- Restart ----
+  const handleRestart = async () => {
+    setRestarting(true);
     try {
-      const body: any = { label: label || undefined, enabled: true };
-      if (type === "feishu") {
-        body.app_id = appId;
-        body.app_secret = appSecret;
-      } else {
-        body.corp_id = corpId;
-        body.agent_id = agentId;
-        body.secret = secret;
-        body.token = token;
-        body.encoding_aes_key = aesKey;
-      }
-      const res = await fetch(`${C_API}/accounts/${type}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (data.success || data.account_id) {
-        setMessage({ type: "success", text: "账号已添加" });
-        onAdded();
-      } else {
-        setMessage({ type: "error", text: data.error || "添加失败" });
-      }
+      await fetch(`${C_API}/channels/restart`, { method: "POST" });
+      setMessage({ type: "success", text: "正在重启，页面将自动刷新..." });
+      setTimeout(() => window.location.reload(), 3000);
     } catch {
-      setMessage({ type: "error", text: "连接服务器失败" });
-    } finally {
-      setLoading(false);
-    }
+      setMessage({ type: "success", text: "请手动重启 addon 后刷新页面" });
+      setStep("choose"); resetAll(); onAdded();
+    } finally { setRestarting(false); }
   };
+
+  const title = step === "choose" ? "添加账号" : step === "restart" ? "重启生效" : `添加${TYPE_LABELS[selectedType] || ""}`;
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>{title}</DialogTitle>
-      <DialogContent sx={{ minHeight: qrState === "qr" ? 350 : undefined }}>
+      <DialogContent sx={{ minHeight: step === "form" && selectedType === "personal_wechat" && qrState === "qr" ? 350 : undefined }}>
 
-        {/* Feishu form */}
-        {type === "feishu" && (
-          <>
-            <TextField fullWidth size="small" label="备注名（可选）" value={label} onChange={(e) => setLabel(e.target.value)} sx={{ mt: 1 }} />
-            <TextField fullWidth size="small" label="App ID" value={appId} onChange={(e) => setAppId(e.target.value)} sx={{ mt: 2 }} />
-            <TextField fullWidth size="small" label="App Secret" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} sx={{ mt: 2 }} />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-              在飞书开放平台「事件订阅」中开启「长连接」模式。
-            </Typography>
-          </>
+        {/* Step 1: Choose type */}
+        {step === "choose" && (
+          <List>
+            {CHANNEL_TYPES.map((ct) => (
+              <ListItem key={ct.type} button onClick={() => handleChooseType(ct.type)} sx={{ borderRadius: 1, mb: 1, border: "1px solid", borderColor: "divider" }}>
+                {ct.icon}
+                <ListItemText primary={ct.label} sx={{ ml: 1 }} />
+              </ListItem>
+            ))}
+          </List>
         )}
 
-        {/* WeChat Work form */}
-        {type === "wechat" && (
-          <>
-            <TextField fullWidth size="small" label="备注名（可选）" value={label} onChange={(e) => setLabel(e.target.value)} sx={{ mt: 1 }} />
-            <TextField fullWidth size="small" label="Corp ID" value={corpId} onChange={(e) => setCorpId(e.target.value)} sx={{ mt: 2 }} />
-            <TextField fullWidth size="small" label="Agent ID" value={agentId} onChange={(e) => setAgentId(e.target.value)} sx={{ mt: 2 }} />
-            <TextField fullWidth size="small" label="Secret" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} sx={{ mt: 2 }} />
-            <TextField fullWidth size="small" label="Token" value={token} onChange={(e) => setToken(e.target.value)} sx={{ mt: 2 }} />
-            <TextField fullWidth size="small" label="Encoding AES Key" value={aesKey} onChange={(e) => setAesKey(e.target.value)} sx={{ mt: 2 }} />
-          </>
-        )}
-
-        {/* Personal WeChat — multi-step flow inside dialog */}
-        {type === "personal_wechat" && (
+        {/* Step 2: Form */}
+        {step === "form" && (
           <Box>
-            {/* Step 0: idle — show name input + start button */}
-            {qrState === "idle" && (
-              <>
-                <TextField fullWidth size="small" label="备注名（可选）" value={label} onChange={(e) => setLabel(e.target.value)} sx={{ mt: 1 }} />
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                  点击下方按钮获取二维码，请用微信扫码登录。
-                </Typography>
-              </>
-            )}
+            <TextField fullWidth size="small" label="备注名（可选）" value={label} onChange={(e) => setLabel(e.target.value)} sx={{ mt: 1 }} />
 
-            {/* Step 1: loading */}
-            {qrState === "loading" && (
-              <Box textAlign="center" py={3}>
-                <CircularProgress size={32} />
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>正在获取二维码...</Typography>
-              </Box>
-            )}
+            {/* Feishu form */}
+            {selectedType === "feishu" && (<>
+              <TextField fullWidth size="small" label="App ID" value={appId} onChange={(e) => setAppId(e.target.value)} sx={{ mt: 2 }} />
+              <TextField fullWidth size="small" label="App Secret" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} sx={{ mt: 2 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>在飞书开放平台「事件订阅」中开启「长连接」模式。</Typography>
+            </>)}
 
-            {/* Step 2: showing QR code */}
-            {qrState === "qr" && (
-              <Box textAlign="center" py={2}>
-                <Box sx={{ p: 2, bgcolor: "white", borderRadius: 2, display: "inline-block", mb: 2 }}>
-                  <QRCode value={qrCodeUrl} size={200} />
+            {/* WeChat Work form */}
+            {selectedType === "wechat" && (<>
+              <TextField fullWidth size="small" label="Corp ID" value={corpId} onChange={(e) => setCorpId(e.target.value)} sx={{ mt: 2 }} />
+              <TextField fullWidth size="small" label="Agent ID" value={agentId} onChange={(e) => setAgentId(e.target.value)} sx={{ mt: 2 }} />
+              <TextField fullWidth size="small" label="Secret" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} sx={{ mt: 2 }} />
+              <TextField fullWidth size="small" label="Token" value={token} onChange={(e) => setToken(e.target.value)} sx={{ mt: 2 }} />
+              <TextField fullWidth size="small" label="Encoding AES Key" value={aesKey} onChange={(e) => setAesKey(e.target.value)} sx={{ mt: 2 }} />
+            </>)}
+
+            {/* Personal WeChat flow */}
+            {selectedType === "personal_wechat" && (<Box>
+              {qrState === "idle" && <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>点击下方按钮获取二维码，请用微信扫码登录。</Typography>}
+              {qrState === "loading" && <Box textAlign="center" py={3}><CircularProgress size={32} /><Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>正在获取二维码...</Typography></Box>}
+              {qrState === "qr" && (
+                <Box textAlign="center" py={2}>
+                  <Box sx={{ p: 2, bgcolor: "white", borderRadius: 2, display: "inline-block", mb: 2 }}><QRCode value={qrCodeUrl} size={200} /></Box>
+                  <Typography variant="body2" color="text.secondary">请用微信扫描上方二维码</Typography>
+                  <CircularProgress size={20} sx={{ mt: 1 }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>等待扫码确认中...</Typography>
                 </Box>
-                <Typography variant="body2" color="text.secondary">请用微信扫描上方二维码</Typography>
-                <CircularProgress size={20} sx={{ mt: 1 }} />
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>等待扫码确认中...</Typography>
-              </Box>
-            )}
-
-            {/* Step 3: naming — after scan success */}
-            {qrState === "naming" && (
-              <>
+              )}
+              {qrState === "naming" && (<>
                 <Alert severity="success" sx={{ mb: 2 }}>微信扫码成功！</Alert>
                 <TextField fullWidth size="small" label="微信账号" value={wxAccountId} disabled sx={{ mb: 2 }} />
-                <TextField fullWidth size="small" label="备注名称" value={wxAccountName} onChange={(e) => setWxAccountName(e.target.value)}
-                  placeholder={label || wxAccountId} sx={{ mb: 1 }} />
+                <TextField fullWidth size="small" label="备注名称" value={wxAccountName} onChange={(e) => setWxAccountName(e.target.value)} placeholder={label || wxAccountId} sx={{ mb: 1 }} />
                 <Typography variant="caption" color="text.secondary">给这个微信账号起个名字，方便识别。</Typography>
-              </>
-            )}
-
-            {/* Step 4: done */}
-            {qrState === "done" && (
-              <Alert severity="success">微信账号已添加完成！</Alert>
-            )}
+              </>)}
+            </Box>)}
           </Box>
+        )}
+
+        {/* Step 3: Restart */}
+        {step === "restart" && (
+          <Alert severity="info" sx={{ mt: 1 }}>新账号已保存，需要重启 addon 才能生效。</Alert>
         )}
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={handleClose}>{qrState === "done" ? "关闭" : "取消"}</Button>
+        <Button onClick={handleClose}>{step === "restart" ? "稍后重启" : "取消"}</Button>
 
-        {/* Feishu / WeChat Work: submit button */}
-        {(type === "feishu" || type === "wechat") && (
-          <Button variant="contained" onClick={handleSubmit} disabled={loading}>
-            {loading ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}
-            添加
-          </Button>
-        )}
+        {step === "choose" && null}
 
-        {/* Personal WeChat: step-dependent buttons */}
-        {type === "personal_wechat" && qrState === "idle" && (
-          <Button variant="contained" onClick={startWxLogin}>
-            获取二维码
-          </Button>
-        )}
-        {type === "personal_wechat" && qrState === "naming" && (
-          <Button variant="contained" onClick={submitWxName} disabled={loading}>
-            {loading ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}
-            确认添加
+        {step === "form" && (<>
+          {(selectedType === "feishu" || selectedType === "wechat") && (
+            <Button variant="contained" onClick={handleSubmit} disabled={loading}>
+              {loading ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}添加
+            </Button>
+          )}
+          {selectedType === "personal_wechat" && qrState === "idle" && (
+            <Button variant="contained" onClick={startWxLogin}>获取二维码</Button>
+          )}
+          {selectedType === "personal_wechat" && qrState === "naming" && (
+            <Button variant="contained" onClick={submitWxName} disabled={loading}>
+              {loading ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}确认添加
+            </Button>
+          )}
+        </>)}
+
+        {step === "restart" && (
+          <Button variant="contained" color="warning" onClick={handleRestart} disabled={restarting}>
+            {restarting ? <CircularProgress size={16} sx={{ mr: 1 }} /> : null}立即重启
           </Button>
         )}
       </DialogActions>

@@ -292,6 +292,8 @@ a{color:#1976d2;text-decoration:none}
         try:
             if self.path == "/api/channels":
                 self._handle_channels_post()
+            elif self.path == "/api/channels/restart":
+                self._handle_channels_restart()
             elif self.path == "/api/feishu/test":
                 self._handle_feishu_test()
             elif self.path.startswith("/api/wechat/login/status"):
@@ -1517,6 +1519,16 @@ def _handle_channels_status(self) -> None:
     self.wfile.write(payload)
 
 
+def _handle_channels_restart(self) -> None:
+    """POST /api/channels/restart — reload channel manager with current config."""
+    try:
+        stored = _read_stored_config()
+        ok = _reload_channels(stored)
+        self._send_json(200, {"success": ok, "message": "通道已重新加载" if ok else "重载失败"})
+    except Exception as e:
+        self._send_json(500, {"error": str(e)})
+
+
 def _handle_channels_get(self) -> None:
     """GET /api/channels — current config (secrets masked) + status."""
     stored = _read_stored_config()
@@ -1726,6 +1738,7 @@ MiMoProxyHandler._handle_wechat_login_status = _handle_wechat_login_status
 MiMoProxyHandler._handle_channels_status = _handle_channels_status
 MiMoProxyHandler._handle_channels_get = _handle_channels_get
 MiMoProxyHandler._handle_channels_post = _handle_channels_post
+MiMoProxyHandler._handle_channels_restart = _handle_channels_restart
 MiMoProxyHandler._handle_feishu_test = _handle_feishu_test
 MiMoProxyHandler._send_json = _send_json
 
