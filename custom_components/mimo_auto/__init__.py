@@ -185,15 +185,22 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             device_id=None,
         )
 
-        # Find and use the conversation entity
-        for entity in hass.data.get("entity_registry", {}).values():
-            if entity.platform == DOMAIN and isinstance(entity, ha_conversation.ConversationEntity):
-                response = await entity.async_process(conversation_input)
-                return {
-                    ATTR_RESPONSE: response.response.speech.get("plain", {}).get("speech", "")
-                    if response.response.speech else "",
-                    ATTR_SESSION_ID: response.conversation_id,
-                }
+        # Find the conversation entity stored during platform setup
+        conversation_entity = None
+        for entry_id, data in hass.data.get(DOMAIN, {}).items():
+            if isinstance(data, dict) and "conversation_entity" in data:
+                conversation_entity = data["conversation_entity"]
+                break
+
+        if conversation_entity is None:
+            raise HomeAssistantError("未找到 MiMo Auto 对话实体")
+
+        response = await conversation_entity.async_process(conversation_input)
+        return {
+            ATTR_RESPONSE: response.response.speech.get("plain", {}).get("speech", "")
+            if response.response.speech else "",
+            ATTR_SESSION_ID: response.conversation_id,
+        }
 
         raise HomeAssistantError("未找到 MiMo Auto 对话实体")
 

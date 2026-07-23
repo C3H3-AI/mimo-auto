@@ -63,6 +63,9 @@ async def async_setup_entry(
     entity = MiMoConversationEntity(hass, coordinator, config_entry)
     async_add_entities([entity])
 
+    # Store entity reference for the chat service in __init__.py
+    hass.data[DOMAIN].setdefault(config_entry.entry_id, {})["conversation_entity"] = entity
+
 
 class MiMoConversationEntity(ConversationEntity):
     """Conversation entity for MiMo Auto.
@@ -293,7 +296,7 @@ class MiMoConversationEntity(ConversationEntity):
                     parts = obj.get("parts", [])
                     if not isinstance(parts, list):
                         continue
-                    if info.get("role") != "assistant" or info.get("finish") != "stop":
+                    if info.get("role") != "assistant":
                         continue
                     for part in parts:
                         if isinstance(part, dict) and part.get("type") == "text":
@@ -311,3 +314,14 @@ class MiMoConversationEntity(ConversationEntity):
         from homeassistant.components import conversation as ha_conversation
         ha_conversation.async_set_agent(self.hass, self._config_entry, self)
         _LOGGER.info("MiMo Auto conversation agent registered")
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister conversation agent when entity is removed."""
+        await super().async_will_remove_from_hass()
+        try:
+            from homeassistant.components import conversation as ha_conversation
+            if hasattr(ha_conversation, "async_unset_agent"):
+                ha_conversation.async_unset_agent(self.hass, self._config_entry, self)
+                _LOGGER.info("MiMo Auto conversation agent unregistered")
+        except Exception as err:
+            _LOGGER.debug("Failed to unregister agent: %s", err)

@@ -49,10 +49,8 @@ class MimoSessionManager:
             return
         try:
             if os.path.exists(self._path):
-                async with asyncio.Lock():
-                    # File I/O is blocking, use executor
-                    loop = asyncio.get_event_loop()
-                    self._data = await loop.run_in_executor(None, self._read_file)
+                loop = asyncio.get_event_loop()
+                self._data = await loop.run_in_executor(None, self._read_file)
                 _LOGGER.debug("Loaded %d sessions from %s", len(self._data), self._path)
         except Exception as err:
             _LOGGER.warning("Failed to load sessions: %s", err)
@@ -89,20 +87,24 @@ class MimoSessionManager:
         self,
         mimo_client: MimoAIClient,
         channel_key: str,
+        force_new: bool = False,
     ) -> str:
         """Get existing session or create new one for channel_key.
 
-        Steps:
-          1. Look up stored session_id for channel_key
-          2. Verify session is valid via GET /session/{id}
-          3. If invalid (404, NotFoundError) → create new session
-          4. If 409 Busy → retry with backoff, then create new
-          5. Persist the mapping
+        Args:
+            force_new: If True, skip cache and always create a new session.
+                       Use after 409 Busy to get a fresh session.
         """
         await self._load()
 
-        async with self._lock:
-            session_id = self._data.get(channel_key, "")
+        if force_new:
+            # Clear cached session for this key
+            async with self._lock:
+                self._data.pop(channel_key, None)
+            session_id = ""
+        else:
+            async with self._lock:
+                session_id = self._data.get(channel_key, "")
 
         if session_id:
             # Verify existing session
@@ -172,7 +174,7 @@ class MimoSessionManager:
         await self._load()
         async with self._lock:
             self._data.pop(channel_key, None)
-            await _save()
+            await self._save()
 
     async def flush(self) -> None:
         """Force immediate save."""

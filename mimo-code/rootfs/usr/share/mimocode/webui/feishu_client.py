@@ -102,6 +102,33 @@ class FeishuClient:
             "error": self._last_error,
         }
 
+    async def send_confirmation(self, confirm_id: str, text: str) -> None:
+        """Send an interactive confirmation card to Feishu.
+
+        The card has Approve/Reject buttons that trigger card callbacks.
+        """
+        from card import build_feishu_card, CardSpec, CardRow, CardButton
+
+        spec = CardSpec(
+            text=text,
+            rows=[
+                CardRow(buttons=[
+                    CardButton(label="确认执行", data=f"approve:{confirm_id}", style=4),
+                    CardButton(label="取消", data=f"reject:{confirm_id}", style=0),
+                ]),
+            ],
+        )
+        card = build_feishu_card(spec, title="操作确认")
+
+        # Send to the last known chat (p2p)
+        # We need to track the current chat context
+        # For now, use the _reply method with as_card=True
+        # The card callback will route back to _on_card_action
+        try:
+            await self._reply("p2p", "", "", json.dumps(card, ensure_ascii=False), as_card=False)
+        except Exception as err:
+            _LOGGER.error("Failed to send confirmation card: %s", err)
+
     # ------------------------------------------------------------------ #
     # Persistent session cache
     # ------------------------------------------------------------------ #

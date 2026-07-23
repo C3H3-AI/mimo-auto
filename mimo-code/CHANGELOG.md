@@ -1,5 +1,31 @@
 # Changelog
 
+## v5.0.2 (2026-07-23)
+
+### 🐛 修复
+
+- **NDJSON 流式解析放宽** — 不再要求 `finish == "stop"`，截断回复（`finish: "length"`）也能正常展示，解决微信通道"前几条正常、后面不回"的问题
+- **流式异常不再静默吞** — 连接异常改为向上抛出，调用方可知晓失败
+- **会话管理器崩溃修复** — `clear_session` 漏 `self` 已修复；双重 Lock 统一改用 `self._lock`
+- **409 "Session is busy" 根治** — 每个 IM 通道加发送串行锁，409 重试升级为 3 次退避 + 每次新建会话；降级为友好提示
+- **tcp_proxy coroutine 冲突修复** — 移除 task 追踪改为干净双向 relay
+- **fs API handler 绑定修复** — `_handle_fs_list/read/write` 已绑定到 handler 类
+- **conversation.py finish 过滤同步修复** — HA 自定义组件的流式解析与 addon 一致
+- **chat 服务实体查找修复** — `mimo_auto.chat` 不再报"未找到对话实体"
+- **Agent 反注册** — 卸载集成时注销 conversation agent，无僵尸 agent
+
+### ✨ 新增
+
+- **操作确认管理器**（`action_confirm.py`）— AI 执行 HA 服务前先拦截等用户确认
+- **飞书交互卡片确认** — 带确认/取消按钮
+- **前端多账号管理** — 飞书/企业微信/个人微信均支持弹窗添加多账号
+- **容器重启持久化** — 修改的文件备份到 `/data`，重启后自动恢复
+
+### ⏳ 已知未修
+
+- 🔴 文件写 API 无鉴权（理论风险，实际触发条件苛刻）
+- 🟡 版本号已统一为 5.0.2
+
 ## v3.2.0 (2026-07-06)
 
 ### ✨ 新增

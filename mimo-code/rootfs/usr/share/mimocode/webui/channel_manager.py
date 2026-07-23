@@ -18,6 +18,7 @@ from ha_context import get_ha_context_builder
 from media import parse_reply_segments, TextSegment, ImageSegment, VoiceSegment, FileSegment, VideoSegment, GifSegment
 from base_channel import build_system_prompt, is_rate_limit, RATE_LIMIT_MESSAGE
 from evolution_review import get_evolution_review
+from action_confirm import get_confirm_manager, _SAFE_TOOLS
 from feishu_client import FeishuClient
 from wechat_client import WeChatWorkClient
 from wechat_personal import PersonalWeChatClient, DEFAULT_BASE_URL
@@ -46,6 +47,11 @@ class ChannelManager:
         self._running = False
         self._mimo_client = MimoAIClient(base_url=mimo_serve_url)
         self._session_manager = MimoSessionManager()
+        # Per-channel serialization: only one in-flight send per channel_key at
+        # a time, to avoid self-inflicted 409 "Session is busy" from concurrent
+        # messages hitting the same session.
+        self._send_locks: dict[str, asyncio.Lock] = {}
+        self._send_locks_guard = asyncio.Lock()
 
     @classmethod
     def from_config_file(
@@ -289,12 +295,7 @@ class ChannelManager:
     async def _handle_message(self, message: dict[str, Any], on_reasoning: Any = None) -> str:
         """Handle incoming message from any channel (async).
 
-        Args:
-            message: Message dict with text, sender_id, chat_id, channel_key.
-            on_reasoning: Optional callback for real-time reasoning push.
-
-        Returns:
-            Response text to send back.
+        Checks for confirmation replies first, then routes to AI.
         """
         text = message.get("text", "")
         channel_key = message.get("channel_key", "")
@@ -306,6 +307,11 @@ class ChannelManager:
         if not channel_key:
             channel_key = f"{sender_id}:{chat_id}" if chat_id else sender_id or "default"
 
+        # Check for confirmation reply
+        confirm_result = self._check_confirmation_reply(text, channel_key)
+        if confirm_result is not None:
+            return confirm_result
+
         media_info = message.get("media_info", "")
         ai_input = f"{text}\n{media_info}".strip() if media_info else text
 
@@ -314,95 +320,298 @@ class ChannelManager:
             account_id or "unknown", sender_id, text[:100],
         )
 
-        return await self._call_mimo_serve(ai_input, channel_key, on_reasoning=on_reasoning)
+        return await self._call_mimo_serve(
+            ai_input, channel_key, on_reasoning=on_reasoning,
+            sender_id=sender_id, chat_id=chat_id, account_id=account_id,
+        )
+
+    def _check_confirmation_reply(self, text: str, channel_key: str) -> str | None:
+        """Check if the text is a confirmation reply (确认/取消).
+
+        Returns response text if matched, None otherwise.
+        """
+        from action_confirm import get_confirm_manager
+
+        text_lower = text.strip().lower()
+        if text_lower not in ("确认", "取消", "approve", "reject", "yes", "no", "y", "n"):
+            return None
+
+        confirm_mgr = get_confirm_manager()
+
+        # Find the most recent pending confirmation for this channel_key
+        # (sorted by creation time, newest first)
+        pending_list = sorted(
+            [(cid, p) for cid, p in confirm_mgr._pending.items()
+             if p.channel_key == channel_key or channel_key.startswith(p.sender_id)],
+            key=lambda x: x[1].created_at,
+            reverse=True,
+        )
+
+        if not pending_list:
+            return None
+
+        confirm_id, pending = pending_list[0]
+        approved = text_lower in ("确认", "approve", "yes", "y")
+
+        confirm_mgr.resolve_confirmation(confirm_id, approved)
+
+        if approved:
+            return f"确认执行：{pending.description}"
+        else:
+            return f"已取消：{pending.description}"
+
+    async def _get_send_lock(self, channel_key: str) -> "asyncio.Lock":
+        """Return (creating if needed) the per-channel serialization lock.
+
+        Guarantees only one in-flight mimo request per channel_key at a time,
+        so concurrent messages on the same session cannot collide with 409.
+        """
+        async with self._send_locks_guard:
+            if channel_key not in self._send_locks:
+                self._send_locks[channel_key] = asyncio.Lock()
+            return self._send_locks[channel_key]
 
     async def _call_mimo_serve(
         self,
         text: str,
         channel_key: str = "default",
         on_reasoning: Any = None,
+        sender_id: str = "",
+        chat_id: str = "",
+        account_id: str = "",
     ) -> str:
-        """Call mimo serve API via unified session manager.
+        """Call mimo serve via unified session manager.
 
-        All aiohttp calls run in the same event loop, avoiding cross-loop Future errors.
-        Session is managed by MimoSessionManager with 409 retry support.
+        Sends are serialized per channel_key so concurrent messages on the same
+        session don't collide with 409. Any 409 that survives the retry/backoff
+        is degraded to a friendly message (inviting wait / side-question /
+        fork) instead of a raw error string.
         """
         try:
-            # 1. Get or create session for this channel_key
-            session_id = await self._session_manager.get_or_create_session(
-                self._mimo_client, channel_key
-            )
+            send_lock = await self._get_send_lock(channel_key)
+            async with send_lock:
+                return await self._dispatch_to_mimo(
+                    text, channel_key, on_reasoning,
+                    sender_id, chat_id, account_id,
+                )
+        except MimoAPIError as err:
+            if err.status == 409:
+                _LOGGER.warning("Session still busy after retries: %s", err)
+                return (
+                    "⚠️ 主线正在处理上一条消息，请稍候再试；"
+                    "也可在网页端发起「旁问」或「派生对话」。"
+                )
+            _LOGGER.error("mimo serve HTTP %d: %s", err.status, err)
+            return f"出错了（HTTP {err.status}），请稍后重试。"
+        except Exception as err:
+            _LOGGER.error("Error calling mimo serve: %s", err)
+            return "出错了，请稍后重试。"
 
-            # 2. Build system prompt
-            ha_ctx = get_ha_context_builder()
-            device_context = await ha_ctx.get_context()
-            evolution = get_evolution_review()
-            lessons_context = evolution.get_lessons_context()
-            system_prompt = build_system_prompt(device_context)
-            if lessons_context:
-                system_prompt = f"{system_prompt}\n\n{lessons_context}"
+    async def _dispatch_to_mimo(
+        self,
+        text: str,
+        channel_key: str,
+        on_reasoning: Any,
+        sender_id: str,
+        chat_id: str,
+        account_id: str,
+    ) -> str:
+        """Send one message to mimo serve with 409/404 auto-recovery.
 
-            # 3. Send message (stream NDJSON)
-            _LOGGER.info(
-                "Calling mimo serve: session=%s, text=%s, system_len=%d",
-                session_id, text[:50], len(system_prompt),
-            )
+        MUST be called while holding the per-channel send lock. Returns the
+        assistant's text response (after rate-limit check and tool-call flow).
+        """
+        # 1. Get or create session
+        session_id = await self._session_manager.get_or_create_session(
+            self._mimo_client, channel_key
+        )
 
-            collected_text = []
+        # 2. Build system prompt
+        ha_ctx = get_ha_context_builder()
+        device_context = await ha_ctx.get_context()
+        evolution = get_evolution_review()
+        lessons_context = evolution.get_lessons_context()
+        system_prompt = build_system_prompt(device_context)
+        if lessons_context:
+            system_prompt = f"{system_prompt}\n\n{lessons_context}"
 
-            async def _on_event(event: dict) -> None:
-                if event.get("type") == "text":
-                    collected_text.append(event["text"])
-                elif event.get("type") == "reasoning":
-                    if on_reasoning:
-                        r = event.get("text", "").strip()
-                        if r:
-                            try:
-                                await on_reasoning(r)
-                            except Exception:
-                                pass
+        # 3. Send message with auto-retry on 409/404
+        collected_text: list[str] = []
+        collected_tool_calls: list[dict] = []
 
-            # Send message with auto-retry on 409/404
+        async def _on_event(event: dict) -> None:
+            if event.get("type") == "text":
+                collected_text.append(event["text"])
+            elif event.get("type") == "reasoning":
+                if on_reasoning:
+                    r = event.get("text", "").strip()
+                    if r:
+                        try:
+                            await on_reasoning(r)
+                        except Exception:
+                            pass
+            elif event.get("type") == "tool-call":
+                collected_tool_calls.append(event)
+
+        max_retries = 3
+        last_err: Exception | None = None
+        for attempt in range(max_retries):
             try:
                 await self._mimo_client.send_message(
                     text, session_id, system=system_prompt, on_event=_on_event
                 )
+                break
             except MimoAPIError as send_err:
+                last_err = send_err
                 if send_err.status in (409, 404):
                     _LOGGER.warning(
-                        "Session %s busy/lost (HTTP %d), creating new session",
-                        session_id, send_err.status,
+                        "Session %s busy/lost (HTTP %d, attempt %d/%d), "
+                        "force-creating new session",
+                        session_id, send_err.status, attempt + 1, max_retries,
                     )
                     session_id = await self._session_manager.get_or_create_session(
-                        self._mimo_client, channel_key
+                        self._mimo_client, channel_key, force_new=True
                     )
                     collected_text.clear()
-                    await self._mimo_client.send_message(
-                        text, session_id, system=system_prompt, on_event=_on_event
-                    )
+                    collected_tool_calls.clear()
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
+        else:
+            # All retries exhausted -> let the caller degrade gracefully.
+            if last_err is not None:
+                raise last_err
+
+        response = "\n".join(collected_text)
+        _LOGGER.info(
+            "mimo serve returned: %s (tool_calls=%d)",
+            response[:100] if response else "(empty)",
+            len(collected_tool_calls),
+        )
+
+        # 4. Check rate limit
+        if response and is_rate_limit(response):
+            _LOGGER.warning("MiMo rate-limited, returning fallback message")
+            return RATE_LIMIT_MESSAGE
+
+        # 5. Handle tool calls (confirmation flow)
+        if collected_tool_calls:
+            result = await self._handle_tool_calls(
+                collected_tool_calls, channel_key, sender_id, chat_id, account_id
+            )
+            if result:
+                return result
+            # If no confirmation needed (safe tools), continue with text response
+
+        # 6. Schedule evolution review (fire-and-forget)
+        if response:
+            evolution = get_evolution_review()
+            asyncio.create_task(
+                evolution.schedule_review(text, response, self._mimo_client, session_id)
+            )
+
+        return response or ""
+
+    async def _handle_tool_calls(
+        self,
+        tool_calls: list[dict],
+        channel_key: str,
+        sender_id: str,
+        chat_id: str,
+        account_id: str,
+    ) -> str | None:
+        """Handle tool calls from AI response.
+
+        For safe tools: execute immediately.
+        For sensitive tools: send confirmation card and wait for user response.
+
+        Returns: response text if handled, None if should continue with text response.
+        """
+        confirm_mgr = get_confirm_manager()
+        results: list[str] = []
+
+        for tc in tool_calls:
+            tool_name = tc.get("tool_name", "")
+            tool_args = tc.get("args", {})
+
+            # Safe tools: execute immediately without confirmation
+            if tool_name in _SAFE_TOOLS:
+                result = await confirm_mgr.execute_tool(tool_name, tool_args)
+                if result.get("success"):
+                    _LOGGER.info("Safe tool executed: %s", tool_name)
                 else:
-                    raise
+                    _LOGGER.warning("Safe tool failed: %s - %s", tool_name, result.get("error"))
+                continue
 
-            response = "\n".join(collected_text)
-            _LOGGER.info("mimo serve returned: %s", response[:100] if response else "(empty)")
+            # Sensitive tools: build confirmation
+            pending = confirm_mgr.build_confirmation(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                channel_key=channel_key,
+                sender_id=sender_id,
+                chat_id=chat_id,
+                account_id=account_id,
+            )
 
-            # 4. Check rate limit
-            if response and is_rate_limit(response):
-                _LOGGER.warning("MiMo rate-limited, returning fallback message")
-                return RATE_LIMIT_MESSAGE
+            if not pending:
+                continue
 
-            # 5. Schedule evolution review (fire-and-forget)
-            if response:
-                evolution = get_evolution_review()
-                asyncio.create_task(
-                    evolution.schedule_review(text, response, self._mimo_client, session_id)
-                )
+            # Build confirmation text for the channel
+            confirm_text = (
+                f"需要你确认执行以下操作：\n\n"
+                f"**{pending.description}**\n\n"
+                f"回复「确认」执行，回复「取消」放弃（5分钟内有效）"
+            )
 
-            return response or ""
+            # Send confirmation via the channel
+            await self._send_confirmation(channel_key, pending.confirm_id, confirm_text)
 
-        except Exception as err:
-            _LOGGER.error("Error calling mimo serve: %s", err)
-            return f"Error: {str(err)}"
+            # Wait for user response (with timeout)
+            approved = await confirm_mgr.wait_for_confirmation(pending.confirm_id)
+
+            if approved:
+                result = await confirm_mgr.execute_tool(tool_name, tool_args)
+                if result.get("success"):
+                    results.append(f"已执行：{pending.description}")
+                    _LOGGER.info("Tool executed after confirmation: %s", tool_name)
+                else:
+                    err_msg = result.get("error", "未知错误")
+                    results.append(f"执行失败：{err_msg}")
+                    _LOGGER.warning("Tool execution failed: %s - %s", tool_name, err_msg)
+            else:
+                results.append(f"已取消：{pending.description}")
+                _LOGGER.info("Tool cancelled by user: %s", tool_name)
+
+        if results:
+            return "\n".join(results)
+        return None
+
+    async def _send_confirmation(
+        self, channel_key: str, confirm_id: str, text: str
+    ) -> None:
+        """Send confirmation request to the user via the appropriate channel."""
+        # Find the channel client for this channel_key
+        for key, client in self._channels.items():
+            if isinstance(client, dict):
+                continue
+            # Match by channel_key prefix or account_id
+            if channel_key.startswith(key) or key in channel_key:
+                try:
+                    if hasattr(client, 'send_confirmation'):
+                        await client.send_confirmation(confirm_id, text)
+                    else:
+                        # Fallback: send as regular text
+                        await self._send_text_fallback(client, text)
+                except Exception as err:
+                    _LOGGER.error("Failed to send confirmation: %s", err)
+                return
+
+        _LOGGER.warning("No channel found for confirmation: %s", channel_key)
+
+    async def _send_text_fallback(self, client: Any, text: str) -> None:
+        """Send confirmation as plain text (fallback for channels without card support)."""
+        if hasattr(client, 'send_text'):
+            await client.send_text(text)
 
     @property
     def is_running(self) -> bool:

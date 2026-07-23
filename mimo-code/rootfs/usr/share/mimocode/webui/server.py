@@ -1704,6 +1704,11 @@ MiMoProxyHandler._handle_add_personal_wechat = _handle_add_personal_wechat
 MiMoProxyHandler._handle_add_wechat_work = _handle_add_wechat_work
 MiMoProxyHandler._serve_accounts_page = _serve_accounts_page
 
+# File system handlers
+MiMoProxyHandler._handle_fs_list = _handle_fs_list
+MiMoProxyHandler._handle_fs_read = _handle_fs_read
+MiMoProxyHandler._handle_fs_write = _handle_fs_write
+
 
 if __name__ == "__main__":
     # Configure logging for _LOGGER messages

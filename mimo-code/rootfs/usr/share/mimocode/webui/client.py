@@ -64,7 +64,10 @@ def parse_ndjson_chunk(
         if not isinstance(parts, list):
             continue
 
-        if info.get("role") != "assistant" or info.get("finish") != "stop":
+        # Only collect from assistant messages.
+        # Do NOT require finish=="stop" — truncated responses (finish:"length")
+        # still contain valid text that should be shown to the user.
+        if info.get("role") != "assistant":
             continue
 
         if dedup_by_id:
@@ -233,6 +236,9 @@ class MimoAIClient:
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.error("send_message_stream failed for session %s: %s", session_id, err)
+            # Re-raise so caller (send_message / channel_manager) knows the stream
+            # was interrupted — don't silently swallow.
+            raise
 
     async def health_check(self, timeout: float = 5.0) -> bool:
         """Return True if mimo serve responds to /session."""

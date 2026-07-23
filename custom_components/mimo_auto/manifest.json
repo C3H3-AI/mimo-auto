@@ -1,7 +1,7 @@
 {
   "domain": "mimo_auto",
   "name": "MiMo Auto",
-  "version": "5.0.0",
+  "version": "5.0.2",
   "requirements": [],
   "codeowners": ["@C3H3-AI"],
   "config_flow": true,
