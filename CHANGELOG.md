@@ -1,5 +1,30 @@
 # Changelog
 
+## v5.0.0 (2026-07-23)
+
+### 🏗 架构重构 — Addon 桥接模式
+
+- **删除了子进程管理** — 集成不再管理 `mimo serve`，Addon 容器完全独立运行（-400 行代码）
+- **删除了冗余模块** — 移除 `mcp_client.py`、`ssh_client.py`、`mimo_proxy.py`、`agent_impl.py`（-4 文件）
+- **合并对话逻辑** — `agent_impl.py` 核心功能合并到 `conversation.py`，删除 Claw Assistant 依赖
+- **简化传感器** — 从 4 个传感器精简为 1 个 Addon 状态传感器（connected/detected/disconnected）
+- **简化配置流程** — 从 4 步（端口 + 飞书 + 企微 + 个人微信）精简为 1 步（server_url + webui_url）
+
+### ⚠️ 不兼容变更
+
+- 最低 HA 版本要求不变（2025.1+）
+- 旧配置条目自动迁移（V1→V2），手动安装用户需重新配置
+- 不再支持本地 `mimo serve` 子进程模式 — 必须配合 Addon 使用
+
+### 🔧 其他
+
+- `DEFAULT_SERVER_URL` 默认端口从 `14095` 改为 `14096`（匹配 Addon tcp_proxy）
+- Config flow 新增 `use_supervisor` 开关
+- 删除旧版 translations（飞书/企微/个人微信配置）
+- 版本号 `5.0.0`
+
+---
+
 ## v4.0.0 (2026-07-17)
 
 ### ✨ 新功能

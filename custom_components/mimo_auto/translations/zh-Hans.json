@@ -3,44 +3,16 @@
     "step": {
       "user": {
         "title": "MiMo Auto 设置",
-        "description": "配置 MiMo Auto 集成。",
+        "description": "连接到 MiMo Code Addon。输入 Addon 的 `mimo serve` 服务地址。",
         "data": {
-          "port": "MiMo 服务器端口",
-          "mimo_bin_path": "MiMo 二进制路径（可选）",
-          "auto_install": "自动安装 MiMo CLI"
-        }
-      },
-      "feishu": {
-        "title": "飞书配置",
-        "description": "配置飞书通道（可选）。",
-        "data": {
-          "enabled": "启用飞书",
-          "app_id": "飞书 App ID",
-          "app_secret": "飞书 App Secret"
-        }
-      },
-      "wechat": {
-        "title": "企业微信配置",
-        "description": "配置企业微信通道（可选）。",
-        "data": {
-          "enabled": "启用企业微信",
-          "corp_id": "企业 ID",
-          "agent_id": "应用 ID",
-          "secret": "应用 Secret",
-          "token": "验证 Token",
-          "encoding_aes_key": "编码 AES Key"
-        }
-      },
-      "personal_wechat": {
-        "title": "个人微信配置",
-        "description": "配置个人微信通道（可选）。启用后，请在 MiMo WebUI 中扫描二维码登录。",
-        "data": {
-          "enabled": "启用个人微信"
+          "server_url": "mimo serve 地址",
+          "webui_url": "WebUI 地址（可选）",
+          "use_supervisor": "通过 Supervisor 自动检测 Addon"
         }
       }
     },
     "error": {
-      "invalid_port": "端口号无效",
+      "cannot_connect": "无法连接到 Addon，请确认 Addon 已启动且地址正确",
       "unknown": "未知错误"
     },
     "abort": {

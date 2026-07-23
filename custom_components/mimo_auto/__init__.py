@@ -1,8 +1,9 @@
 """Init for MiMo Auto integration.
 
-This component integrates MiMo Auto AI into Home Assistant by starting
-a local `mimo serve` subprocess and providing a conversation agent
-that communicates with it via HTTP API.
+This integration bridges HA with the MiMo Code Addon for:
+- Conversation agent (HA voice assistant / UI chat)
+- Chat service (automations)
+- Addon status monitoring
 """
 
 from __future__ import annotations
@@ -15,44 +16,31 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     ATTR_MESSAGE,
     ATTR_SESSION_ID,
-    CONF_AUTO_INSTALL,
-    CONF_MIMO_BIN,
-    CONF_PORT,
-    DEFAULT_AUTO_INSTALL,
-    DEFAULT_MIMO_BIN,
-    DEFAULT_PORT,
+    ATTR_RESPONSE,
+    CONF_SERVER_URL,
+    CONF_USE_SUPERVISOR,
+    CONF_WEBUI_URL,
+    DEFAULT_SERVER_URL,
+    DEFAULT_WEBUI_URL,
+    DEFAULT_USE_SUPERVISOR,
     DOMAIN,
     DOMAIN_NAME,
     ERROR_SERVER_NOT_RUNNING,
     SERVICE_CHAT,
 )
-from .agent_impl import MiMoConversationAgent
 from .coordinator import MiMoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.CONVERSATION, Platform.SENSOR]
 
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                vol.Optional(CONF_MIMO_BIN, default=DEFAULT_MIMO_BIN): cv.string,
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-# Service schema for chat service
 SERVICE_CHAT_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_MESSAGE): cv.string,
@@ -62,205 +50,137 @@ SERVICE_CHAT_SCHEMA = vol.Schema(
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the MiMo Auto integration from configuration.yaml.
-
-    Args:
-        hass: The HomeAssistant instance.
-        config: The configuration dictionary.
-
-    Returns:
-        True if setup was successful.
-    """
+    """Set up the MiMo Auto integration from configuration.yaml."""
     if DOMAIN not in config:
         return True
-
-    # Forward to config flow for import
     hass.async_create_task(
         hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": "import"},
-            data=config[DOMAIN],
+            DOMAIN, context={"source": "import"}, data=config[DOMAIN],
         )
     )
-
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up MiMo Auto from a config entry.
-
-    Initializes the coordinator (starts the mimo server subprocess),
-    registers the conversation agent, and sets up services.
-
-    Args:
-        hass: The HomeAssistant instance.
-        entry: The config entry to set up.
-
-    Returns:
-        True if setup was successful.
-
-    Raises:
-        ConfigEntryNotReady: If the mimo server could not be started.
-    """
+    """Set up MiMo Auto from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     config = {
-        CONF_PORT: entry.data.get(CONF_PORT, DEFAULT_PORT),
-        CONF_MIMO_BIN: entry.data.get(CONF_MIMO_BIN, DEFAULT_MIMO_BIN),
-        CONF_AUTO_INSTALL: entry.data.get(CONF_AUTO_INSTALL, DEFAULT_AUTO_INSTALL),
+        CONF_SERVER_URL: entry.data.get(CONF_SERVER_URL, DEFAULT_SERVER_URL),
+        CONF_USE_SUPERVISOR: entry.data.get(CONF_USE_SUPERVISOR, DEFAULT_USE_SUPERVISOR),
     }
 
-    # Create coordinator
     coordinator = MiMoCoordinator(hass, config)
+    connected = await coordinator.start()
+    if not connected:
+        _LOGGER.warning(
+            "MiMo Code Addon not reachable at %s. Will retry in background.",
+            config[CONF_SERVER_URL],
+        )
 
-    # Start the server
-    _LOGGER.info("Starting MiMo server for config entry %s", entry.entry_id)
-    server_started = await coordinator.start_server()
-    if not server_started:
-        _LOGGER.error("Failed to start MiMo server for config entry %s", entry.entry_id)
-        raise ConfigEntryNotReady("Could not start MiMo Auto server")
-
-    # Store coordinator and agent in hass.data
-    agent_impl = MiMoConversationAgent(hass, coordinator, entry)
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
-        "agent_impl": agent_impl,
     }
 
-    # Register services
     await _async_register_services(hass)
-
-    # Register API proxy views (for web panel to reach MiMo server over HTTPS)
-    from .mimo_proxy import async_register_proxy_views
-    async_register_proxy_views(hass)
-
-    # Forward setup to platforms (conversation entity for claw_assistant)
-    # Note: conversation.py handles agent registration via async_added_to_hass()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Register update listener for config entry changes
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    _LOGGER.info(
-        "MiMo Auto integration set up successfully (entry: %s)", entry.entry_id
-    )
+    _LOGGER.info("MiMo Auto integration set up (entry: %s)", entry.entry_id)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate config entry from V1 to V2.
+
+    V1 had: port, mimo_bin_path, auto_install, channels (dict with feishu/wechat/etc)
+    V2 has: server_url, webui_url, use_supervisor
+    """
+    if entry.version == 1:
+        _LOGGER.info("Migrating MiMo Auto config entry from V1 to V2")
+        data = {**entry.data}
+        # Map old port to server_url
+        old_port = data.pop("port", 14096)
+        data[CONF_SERVER_URL] = data.get(CONF_SERVER_URL, f"http://127.0.0.1:{old_port}")
+        data[CONF_WEBUI_URL] = data.get(CONF_WEBUI_URL, DEFAULT_WEBUI_URL)
+        data[CONF_USE_SUPERVISOR] = data.get(CONF_USE_SUPERVISOR, DEFAULT_USE_SUPERVISOR)
+        # Remove old unused keys
+        data.pop("mimo_bin_path", None)
+        data.pop("mimo_bin", None)
+        data.pop("auto_install", None)
+        data.pop("channels", None)
+        data.pop("mcp_url", None)
+        data.pop("ssh_host", None)
+        data.pop("ssh_port", None)
+        data.pop("ssh_username", None)
+        data.pop("ssh_key_path", None)
+        data.pop("supervisor_token", None)
+
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+        _LOGGER.info("MiMo Auto config entry migrated to V2")
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry.
-
-    Stops the mimo server and removes the conversation agent.
-
-    Args:
-        hass: The HomeAssistant instance.
-        entry: The config entry to unload.
-
-    Returns:
-        True if unload was successful.
-    """
-    _LOGGER.info("Unloading MiMo Auto integration (entry: %s)", entry.entry_id)
-
+    """Unload a config entry."""
     data = hass.data[DOMAIN].get(entry.entry_id)
-    if data is None:
-        return True
+    if data:
+        coordinator: MiMoCoordinator = data.get("coordinator")
+        if coordinator:
+            await coordinator.stop()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
-    # Stop the coordinator (kills the mimo process)
-    coordinator: MiMoCoordinator = data.get("coordinator")
-    if coordinator:
-        await coordinator.stop_server()
-
-    # Remove entry data
-    hass.data[DOMAIN].pop(entry.entry_id, None)
-
-    # Clean up services if no entries remain
     if not hass.data[DOMAIN]:
-        _LOGGER.debug("No more MiMo entries, removing services")
         hass.services.async_remove(DOMAIN, SERVICE_CHAT)
 
-    _LOGGER.info("MiMo Auto integration unloaded successfully")
     return True
 
 
-async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle removal of a config entry.
-
-    Called when the user removes the integration from the UI.
-    Any cleanup beyond async_unload_entry should happen here.
-
-    Args:
-        hass: The HomeAssistant instance.
-        entry: The config entry being removed.
-    """
-    _LOGGER.info("Removing MiMo Auto integration (entry: %s)", entry.entry_id)
-    # Most cleanup is handled by async_unload_entry
-
-
-async def _async_update_listener(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> None:
-    """Handle config entry update.
-
-    Restarts the coordinator with the new configuration.
-
-    Args:
-        hass: The HomeAssistant instance.
-        entry: The updated config entry.
-    """
-    _LOGGER.info("Reconfiguring MiMo Auto (entry: %s)", entry.entry_id)
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle config entry update."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
-    """Register custom services for the integration.
-
-    Registers the `chat` service that allows sending messages to
-    MiMo Auto from automations and scripts.
-
-    Args:
-        hass: The HomeAssistant instance.
-    """
+    """Register custom services for the integration."""
 
     async def handle_chat_service(call: ServiceCall) -> ServiceResponse:
         """Handle the chat service call."""
         from homeassistant.components import conversation as ha_conversation
 
-        # Find the first active entry
         if not hass.data.get(DOMAIN):
-            raise HomeAssistantError("No MiMo Auto instance is configured")
+            raise HomeAssistantError("未配置 MiMo Auto")
 
         entry_id = next(iter(hass.data[DOMAIN]))
         data = hass.data[DOMAIN][entry_id]
-        agent: MiMoConversationAgent | None = data.get("agent_impl")
-        coordinator: MiMoCoordinator | None = data.get("coordinator")
+        coordinator: MiMoCoordinator = data.get("coordinator")
 
-        if agent is None or coordinator is None:
-            raise HomeAssistantError("MiMo Auto is not properly initialized")
-
-        if not coordinator.is_running:
+        if not coordinator or not coordinator.is_running:
             raise HomeAssistantError(ERROR_SERVER_NOT_RUNNING)
 
         message = call.data[ATTR_MESSAGE]
 
-        # Create a conversation input
         conversation_input = ha_conversation.ConversationInput(
             text=message,
             conversation_id=call.data.get(ATTR_SESSION_ID),
             context=None,
-            language="en",
+            language="zh-cn",
             device_id=None,
         )
 
-        # Process the conversation
-        response = await agent.async_process(conversation_input)
+        # Find and use the conversation entity
+        for entity in hass.data.get("entity_registry", {}).values():
+            if entity.platform == DOMAIN and isinstance(entity, ha_conversation.ConversationEntity):
+                response = await entity.async_process(conversation_input)
+                return {
+                    ATTR_RESPONSE: response.response.speech.get("plain", {}).get("speech", "")
+                    if response.response.speech else "",
+                    ATTR_SESSION_ID: response.conversation_id,
+                }
 
-        return {
-            ATTR_RESPONSE: response.response.speech.get("plain", {}).get("speech", "") if response.response.speech else "",
-            ATTR_SESSION_ID: response.conversation_id,
-        }
+        raise HomeAssistantError("未找到 MiMo Auto 对话实体")
 
-    # Register service only if not already registered
     if hass.services.has_service(DOMAIN, SERVICE_CHAT):
         return
 
