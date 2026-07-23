@@ -5,6 +5,7 @@
 #
 # Architecture:
 #   TCP Proxy (0.0.0.0:$PORT) → mimo serve (127.0.0.1:$INNER_PORT)
+#   MCP → external ha-mcp integration (configured via ha_mcp_url in options.json)
 # ============================================================
 
 # Use /data/mimocode as working directory so mimo can create its project files
@@ -45,10 +46,9 @@ if os.path.exists(CFG_PATH):
     except Exception:
         pass
 
-# 2. Determine URL: options.json > default localhost:8234
+# 2. Determine URL: options.json > no default (internal ha-mcp removed)
 if not ha_mcp_url:
-    # Default: ha-mcp server runs on localhost:8234
-    ha_mcp_url = "http://127.0.0.1:8234"
+    print("⚠️ ha_mcp_url 未配置，MCP 设备控制不可用（请在 Addon 配置中设置外部 ha-mcp 地址）")
 
 if ha_mcp_url:
     cfg["mcp"] = {

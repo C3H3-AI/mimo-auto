@@ -38,12 +38,14 @@ class HAContextBuilder:
 
     Caches device states to avoid fetching on every message.
     Thread-safe: uses asyncio.Lock for the async path.
+    Reuses a single aiohttp.ClientSession across requests.
     """
 
     def __init__(self) -> None:
         self._cache: str = ""
         self._cache_time: float = 0
         self._lock = asyncio.Lock()
+        self._session: aiohttp.ClientSession | None = None
 
     async def get_context(self) -> str:
         """Get the HA device context string.
@@ -65,6 +67,20 @@ class HAContextBuilder:
                 self._cache_time = time.time()
             return self._cache
 
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        """Ensure we have an active HTTP session."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10)
+            )
+        return self._session
+
+    async def close(self) -> None:
+        """Close the HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
     async def _fetch_context(self) -> str:
         """Fetch all entity states from HA and build context string."""
         token = _get_ha_token()
@@ -73,18 +89,19 @@ class HAContextBuilder:
             return ""
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{HA_URL}/api/states",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status != 200:
-                        _LOGGER.warning("HA API returned %d", resp.status)
-                        return ""
+            session = await self._ensure_session()
+            async with session.get(
+                f"{HA_URL}/api/states",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("HA API returned %d", resp.status)
+                    return ""
 
-                    states = await resp.json()
-                    return self._build_context(states)
+                states = await resp.json()
+                context = self._build_context(states)
+                _LOGGER.debug("HA context built: %d entities, %d chars", len(states), len(context))
+                return context
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.warning("Failed to fetch HA states: %s", err)

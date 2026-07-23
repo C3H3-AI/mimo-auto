@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import time
 from typing import Any, Callable, Awaitable
 from uuid import uuid4
@@ -312,16 +313,35 @@ class PersonalWeChatClient:
         remaining = self._pause_until - time.time()
         return remaining if remaining > 0 else 0.0
 
-    async def start(self) -> None:
-        """Start message receiving loop."""
+    def start(self) -> None:
+        """Start message receiving loop in a background thread with its own event loop.
+
+        Uses a dedicated thread + event loop (same pattern as FeishuClient)
+        to avoid task-scheduling issues with asyncio.create_task() during
+        run_until_complete().
+        """
         if not self._logged_in:
             _LOGGER.error("Cannot start: not logged in")
             return
 
         self._running = True
         self._status = "connected"
-        asyncio.create_task(self._message_loop())
-        _LOGGER.info("WeChat message loop started")
+        self._loop_thread = threading.Thread(target=self._run_message_loop, daemon=True, name="wechat_poll")
+        self._loop_thread.start()
+        _LOGGER.info("WeChat message loop started (thread)")
+
+    def _run_message_loop(self) -> None:
+        """Run _message_loop in its own event loop (daemon thread)."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._message_loop())
+        except Exception as err:
+            _LOGGER.error("WeChat message loop thread crashed: %s", err)
+            import traceback
+            _LOGGER.error("WeChat message loop traceback: %s", traceback.format_exc())
+        finally:
+            loop.close()
 
     async def stop(self) -> None:
         """Stop message receiving loop."""
@@ -329,6 +349,8 @@ class PersonalWeChatClient:
 
     async def _message_loop(self) -> None:
         """Long poll for new messages with retry backoff + session expiry."""
+        _LOGGER.info("WeChat _message_loop: ENTERED (running=%s, logged_in=%s, token=%s)",
+                     self._running, self._logged_in, bool(self._token))
         consecutive_failures = 0
         total_failures = 0
         next_timeout_ms = LONG_POLL_TIMEOUT_MS
@@ -501,98 +523,73 @@ class PersonalWeChatClient:
             # Typing indicator: send "typing" status before processing
             asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=1))
 
-            if self._show_reasoning and self._mimo_url:
-                # Streaming mode: push reasoning as it arrives, then send final response
-                await self._handle_message_streaming(from_user_id, context_token, text)
-            else:
-                # Standard mode: call handler, get single response
-                response = await self._on_message({
-                    "message_id": str(msg.get("msg_id") or ""),
-                    "sender_id": from_user_id,
-                    "chat_id": to_user_id,
-                    "text": text,
-                    "msg_type": msg_type,
-                    "context_token": context_token,
-                    "account_id": self._account_id,
-                })
+            # Standard flow: call channel_manager handler
+            # Pass reasoning callback for real-time streaming
+            reasoning_sent = False
+            def _on_reasoning(text: str) -> None:
+                nonlocal reasoning_sent
+                # Send each reasoning chunk immediately (like typing effect)
+                if text and not reasoning_sent:
+                    reasoning_sent = True
+                if text:
+                    # Send chunk immediately via fire-and-forget task
+                    asyncio.create_task(self._send_reasoning_chunk(
+                        from_user_id, context_token, text
+                    ))
 
-                # Stop typing indicator
-                asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))
+            response = await self._on_message({
+                "message_id": str(msg.get("msg_id") or ""),
+                "sender_id": from_user_id,
+                "chat_id": to_user_id,
+                "text": text,
+                "msg_type": msg_type,
+                "context_token": context_token,
+                "account_id": self._account_id,
+            }, on_reasoning=_on_reasoning)
 
-                # Send response if any
-                if response:
-                    await self.send_text(
-                        to_user_id=from_user_id,
-                        text=response,
-                        context_token=context_token,
-                    )
+            # Stop typing indicator
+            asyncio.create_task(self._send_typing_indicator(from_user_id, context_token, status=2))
+
+            # Send response if any (reasoning was already sent via callback)
+            if response:
+                # Parse media segments and send each
+                from media import parse_reply_segments, TextSegment, ImageSegment, VoiceSegment, FileSegment, VideoSegment, GifSegment
+                segments = parse_reply_segments(response)
+                for seg in segments:
+                    if isinstance(seg, TextSegment):
+                        await self.send_text(
+                            to_user_id=from_user_id,
+                            text=seg.text,
+                            context_token=context_token,
+                        )
+                    elif isinstance(seg, ImageSegment):
+                        await self._send_media(from_user_id, context_token, seg.source, "image")
+                    elif isinstance(seg, VoiceSegment):
+                        await self._send_voice(from_user_id, context_token, seg.text)
+                    elif isinstance(seg, FileSegment):
+                        await self._send_media(from_user_id, context_token, seg.source, "file")
+                    elif isinstance(seg, VideoSegment):
+                        await self._send_media(from_user_id, context_token, seg.source, "video")
+                    elif isinstance(seg, GifSegment):
+                        await self._send_media(from_user_id, context_token, seg.source, "image")
 
         except Exception as err:
             _LOGGER.error("Error handling WeChat message: %s", err)
 
-    async def _handle_message_streaming(
-        self, from_user_id: str, context_token: str, text: str,
-    ) -> None:
-        """Handle message with streaming (pushes reasoning as intermediate texts)."""
+    async def _send_reasoning(self, to_user_id: str, context_token: str, text: str) -> None:
+        """Send a single reasoning chunk to user (fire-and-forget)."""
         try:
-            from client import MimoAIClient
-
-            # Create session for streaming
-            key = f"wx_{self._account_id}_{uuid4().hex[:8]}"
-            system = self._on_message  # Not used in streaming; _on_message called below
-            session_id = f"ses_{uuid4().hex[:24]}"
-
-            async with MimoAIClient(base_url=self._mimo_url or "http://127.0.0.1:14096") as ai:
-                # Ensure session exists
-                await ai.ensure_session(session_id)
-
-                sent_reasoning = False
-                events = await ai.send_message_stream(text, session_id)
-
-                for event in events:
-                    if event.get("type") == "reasoning" and not sent_reasoning:
-                        r = event.get("text", "").strip()
-                        if r:
-                            await self.send_text(
-                                to_user_id=from_user_id,
-                                text=f"> 思考过程：\n\n{r}",
-                                context_token=context_token,
-                            )
-                            sent_reasoning = True
-
-                # Collect final response
-                final = "\n".join(
-                    e["text"] for e in events
-                    if e.get("type") == "text" and e.get("text", "").strip()
-                )
-
-                if final:
-                    await self.send_text(
-                        to_user_id=from_user_id,
-                        text=final,
-                        context_token=context_token,
-                    )
-
-                # Clean up session
-                try:
-                    await ai.delete_session(session_id)
-                except Exception:
-                    pass
-
+            await self.send_text(
+                to_user_id=to_user_id,
+                text=f"> {text}",
+                context_token=context_token,
+            )
         except Exception as err:
-            _LOGGER.error("Error in WeChat streaming handler: %s", err)
-            # Fallback: try normal handler
-            try:
-                response = await self._on_message({
-                    "sender_id": from_user_id,
-                    "text": text,
-                    "context_token": context_token,
-                    "account_id": self._account_id,
-                })
-                if response:
-                    await self.send_text(to_user_id=from_user_id, text=response, context_token=context_token)
-            except Exception:
-                pass
+            _LOGGER.debug("Failed to send reasoning chunk: %s", err)
+
+    async def _send_reasoning_chunk(self, to_user_id: str, context_token: str, text: str) -> None:
+        """Send a single reasoning chunk (async task wrapper)."""
+        await self._send_reasoning(to_user_id, context_token, text)
 
     async def _send_typing_indicator(self, to_user_id: str, context_token: str, status: int = 1) -> None:
         """Send typing indicator (1=typing, 2=stop). Swallows errors silently."""
@@ -653,6 +650,134 @@ class PersonalWeChatClient:
 
         _LOGGER.debug("Message sent to %s", to_user_id)
         return client_id
+
+    async def _send_media(
+        self,
+        to_user_id: str,
+        context_token: str,
+        source: str,
+        media_type: str = "image",
+    ) -> None:
+        """Send media (image/video/file) to WeChat user via CDN."""
+        try:
+            from media_utils import (
+                resolve_media_source, download_url_source,
+                compress_image, compress_gif,
+                upload_to_wechat_cdn, build_cdn_media,
+            )
+
+            # Resolve source
+            data, filename = None, None
+            if source.startswith(("http://", "https://")):
+                data, filename = await download_url_source(source)
+            else:
+                result = resolve_media_source(source)
+                if result:
+                    data, filename = result
+
+            if not data:
+                _LOGGER.warning("Failed to resolve media source: %s", source)
+                await self.send_text(to_user_id, f"[媒体发送失败: {source}]", context_token)
+                return
+
+            # Compress if needed
+            if media_type == "image" and filename:
+                if filename.lower().endswith(".gif"):
+                    data = await compress_gif(data)
+                elif any(filename.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                    data = await compress_image(data)
+
+            # Upload to WeChat CDN
+            media_type_int = {"image": 1, "video": 2, "file": 3, "voice": 4}.get(media_type, 3)
+            uploaded = await upload_to_wechat_cdn(
+                base_url=self._base_url,
+                token=self._token,
+                to_user_id=to_user_id,
+                media_bytes=data,
+                media_type=media_type_int,
+            )
+
+            # Build CDN media dict
+            cdn_media = build_cdn_media(uploaded)
+
+            # Send message with CDN media
+            await self._send_media_message(to_user_id, context_token, media_type, cdn_media)
+
+        except Exception as err:
+            _LOGGER.error("Failed to send media: %s", err)
+            await self.send_text(to_user_id, f"[媒体发送失败: {err}]", context_token)
+
+    async def _send_media_message(
+        self,
+        to_user_id: str,
+        context_token: str,
+        media_type: str,
+        cdn_media: dict,
+    ) -> None:
+        """Send a media message via WeChat API."""
+        client_id = f"mimo_{uuid4().hex}"
+
+        # Map media_type to message_type
+        msg_type_map = {"image": 3, "video": 4, "file": 5, "voice": 6}
+        msg_type = msg_type_map.get(media_type, 3)
+
+        # Build item_list based on media type
+        item_list = []
+        if media_type == "image":
+            item_list = [{"type": 2, "image_item": cdn_media}]
+        elif media_type == "video":
+            item_list = [{"type": 3, "video_item": cdn_media}]
+        elif media_type == "file":
+            item_list = [{"type": 5, "file_item": cdn_media}]
+        elif media_type == "voice":
+            item_list = [{"type": 4, "voice_item": cdn_media}]
+
+        await _api_post(
+            self._base_url,
+            "ilink/bot/sendmessage",
+            {
+                "msg": {
+                    "from_user_id": "",
+                    "to_user_id": to_user_id,
+                    "client_id": client_id,
+                    "message_type": msg_type,
+                    "message_state": 2,
+                    "item_list": item_list,
+                    "context_token": context_token,
+                },
+                "base_info": {"channel_version": "mimo-code-addon"},
+            },
+            token=self._token,
+        )
+        _LOGGER.debug("Media message sent to %s (type=%s)", to_user_id, media_type)
+
+    async def _send_voice(
+        self,
+        to_user_id: str,
+        context_token: str,
+        text: str,
+    ) -> None:
+        """Send voice message via TTS."""
+        try:
+            from tts import generate_tts_mp3, mp3_to_silk
+
+            mp3_data = await generate_tts_mp3(text)
+            if not mp3_data:
+                await self.send_text(to_user_id, f"[语音] {text}", context_token)
+                return
+
+            silk_result = await mp3_to_silk(mp3_data)
+            if silk_result:
+                silk_data, duration_ms = silk_result
+                # TODO: Upload SILK to CDN and send voice message
+                _LOGGER.info("Voice message ready (%d bytes, %dms), upload not implemented", len(silk_data), duration_ms)
+                await self.send_text(to_user_id, f"[语音] {text}", context_token)
+            else:
+                await self.send_text(to_user_id, f"[语音] {text}", context_token)
+
+        except Exception as err:
+            _LOGGER.error("Failed to send voice: %s", err)
+            await self.send_text(to_user_id, f"[语音] {text}", context_token)
 
     def save_credentials(self) -> dict[str, Any]:
         """Save login credentials + poll state for persistence.

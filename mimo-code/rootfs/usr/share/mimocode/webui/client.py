@@ -1,8 +1,7 @@
 """Unified MiMo serve HTTP client.
 
-Provides MimoAIClient (async), MimoClientSync (sync wrapper),
-and parse_ndjson_chunk (pure function) to eliminate 4x duplicated
-NDJSON parsing across channel_manager, feishu_client, agent_impl, and server.
+Provides MimoAIClient for async communication with mimo serve,
+and parse_ndjson_chunk for NDJSON parsing.
 """
 
 from __future__ import annotations
@@ -15,6 +14,15 @@ from typing import Any, AsyncIterator
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class MimoAPIError(Exception):
+    """Raised when mimo serve returns a non-2xx HTTP status."""
+
+    def __init__(self, status: int, body: str = "") -> None:
+        super().__init__(f"mimo serve HTTP {status}: {body[:200]}")
+        self.status = status
+        self.body = body
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +118,7 @@ class MimoAIClient:
         return self._session
 
     async def ensure_session(self, session_id: str, timeout: float = 5.0) -> str:
-        """Verify session exists, create only if needed.
-
-        If *session_id* is provided, check via GET /session/{id}.
-        Only POST /session if verification fails.
-        """
+        """Verify session exists, create only if needed."""
         session = await self._ensure_session()
 
         # Verify existing session
@@ -125,9 +129,17 @@ class MimoAIClient:
                     timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as resp:
                     if resp.status == 200:
-                        return session_id
-            except (aiohttp.ClientError, asyncio.TimeoutError):
-                pass
+                        data = await resp.json()
+                        # Check for error in response body
+                        # mimo server returns {"name":"NotFoundError","data":{...}} for expired sessions
+                        if isinstance(data, dict) and ("error" in data or data.get("name") == "NotFoundError"):
+                            _LOGGER.debug("ensure_session: session %s has error, will create new", session_id)
+                        else:
+                            _LOGGER.debug("ensure_session: session %s exists, reusing", session_id)
+                            return session_id
+                    _LOGGER.debug("ensure_session: session %s returned %d, will create new", session_id, resp.status)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                _LOGGER.debug("ensure_session: verify failed for %s: %s, will create new", session_id, err)
 
         # Create new session
         try:
@@ -140,9 +152,11 @@ class MimoAIClient:
                     data = await resp.json()
                     new_id = data.get("id", "")
                     if new_id:
+                        _LOGGER.info("ensure_session: created new session %s", new_id)
                         return new_id
+                _LOGGER.warning("ensure_session: POST /session returned %d", resp.status)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            _LOGGER.warning("ensure_session failed: %s", err)
+            _LOGGER.error("ensure_session failed: %s", err)
 
         return session_id
 
@@ -150,22 +164,35 @@ class MimoAIClient:
         self, text: str, session_id: str, *,
         system: str | None = None,
         timeout: float | None = None,
+        on_event: Any = None,
     ) -> str:
-        """Send a message and return the concatenated response text."""
+        """Send a message and return the concatenated response text.
+
+        If on_event callback is provided, it's called for each event as it arrives.
+        """
         parts: list[str] = []
         async for event in self.send_message_stream(
             text, session_id, system=system, timeout=timeout
         ):
             if event.get("type") == "text":
                 parts.append(event["text"])
+            if on_event:
+                try:
+                    await on_event(event)
+                except Exception:
+                    pass
         return "\n".join(parts)
 
     async def send_message_stream(
         self, text: str, session_id: str, *,
         system: str | None = None,
         timeout: float | None = None,
+        on_event: Any = None,
     ) -> AsyncIterator[dict]:
-        """Send a message and yield parsed NDJSON events as dicts."""
+        """Send a message and yield parsed NDJSON events as dicts.
+
+        If on_event callback is provided, it's called for each event as it arrives.
+        """
         session = await self._ensure_session()
         url = f"{self._base_url}/session/{session_id}/message"
         body: dict[str, Any] = {
@@ -176,12 +203,15 @@ class MimoAIClient:
             body["system"] = system
 
         tout = aiohttp.ClientTimeout(total=timeout or self._default_timeout)
+        _LOGGER.debug("send_message_stream: POST %s (text=%d chars, system=%d chars)",
+                       url, len(text), len(system) if system else 0)
 
         try:
             async with session.post(url, json=body, timeout=tout) as resp:
                 if resp.status != 200:
-                    _LOGGER.error("send_message: HTTP %d", resp.status)
-                    return
+                    body = await resp.text()
+                    _LOGGER.error("send_message: HTTP %d for session %s: %s", resp.status, session_id, body[:200])
+                    raise MimoAPIError(resp.status, body)
 
                 buf = ""
                 seen_ids: set[str] = set()
@@ -202,7 +232,7 @@ class MimoAIClient:
                         yield item
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            _LOGGER.error("send_message_stream failed: %s", err)
+            _LOGGER.error("send_message_stream failed for session %s: %s", session_id, err)
 
     async def health_check(self, timeout: float = 5.0) -> bool:
         """Return True if mimo serve responds to /session."""
@@ -221,85 +251,8 @@ class MimoAIClient:
             await self._session.close()
             self._session = None
 
+    async def __aenter__(self) -> "MimoAIClient":
+        return self
 
-# ---------------------------------------------------------------------------
-# Sync wrapper (for thread contexts: feishu WS thread, etc.)
-# ---------------------------------------------------------------------------
-
-class MimoClientSync:
-    """Synchronous wrapper around MimoAIClient for use in non-async threads."""
-
-    def __init__(self, base_url: str = "http://127.0.0.1:14096") -> None:
-        self._base_url = base_url
-        self._client: MimoAIClient | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    def _get_loop(self) -> asyncio.AbstractEventLoop:
-        if self._loop is None or self._loop.is_closed():
-            self._loop = asyncio.new_event_loop()
-        return self._loop
-
-    def _get_client(self) -> MimoAIClient:
-        if self._client is None:
-            self._client = MimoAIClient(base_url=self._base_url)
-        return self._client
-
-    def ensure_session(self, session_id: str, timeout: float = 5.0) -> str:
-        """Verify session exists, create only if needed."""
-        loop = self._get_loop()
-        client = self._get_client()
-        return loop.run_until_complete(client.ensure_session(session_id, timeout))
-
-    def send_message(
-        self, text: str, session_id: str, *,
-        system: str | None = None,
-        timeout: float = 180.0,
-    ) -> str:
-        """Send a message and return the full response text."""
-        loop = self._get_loop()
-        client = self._get_client()
-        return loop.run_until_complete(
-            client.send_message(text, session_id, system=system, timeout=timeout)
-        )
-
-    def send_message_stream(
-        self, text: str, session_id: str, *,
-        system: str | None = None,
-        timeout: float = 180.0,
-    ) -> list[dict]:
-        """Send a message and return all parsed NDJSON events as a list."""
-        loop = self._get_loop()
-        client = self._get_client()
-
-        async def _collect() -> list[dict]:
-            events: list[dict] = []
-            async for event in client.send_message_stream(
-                text, session_id, system=system, timeout=timeout
-            ):
-                events.append(event)
-            return events
-
-        return loop.run_until_complete(_collect())
-
-    def health_check(self, timeout: float = 5.0) -> bool:
-        """Check if mimo serve is reachable."""
-        loop = self._get_loop()
-        client = self._get_client()
-        return loop.run_until_complete(client.health_check(timeout))
-
-    def close(self) -> None:
-        """Close the underlying async client and event loop."""
-        if self._client:
-            loop = self._get_loop()
-            if not loop.is_closed():
-                loop.run_until_complete(self._client.close())
-            self._client = None
-        if self._loop and not self._loop.is_closed():
-            self._loop.close()
-            self._loop = None
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()

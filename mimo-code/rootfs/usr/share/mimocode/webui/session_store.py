@@ -18,12 +18,15 @@ DEFAULT_PATH = "/data/mimocode/sessions.json"
 
 
 class SessionStore:
-    """Thread-safe JSON-backed session ID store."""
+    """Thread-safe JSON-backed session ID store with debounced persistence."""
 
-    def __init__(self, path: str = DEFAULT_PATH) -> None:
+    def __init__(self, path: str = DEFAULT_PATH, debounce_seconds: float = 2.0) -> None:
         self._path = path
         self._data: dict[str, str] = {}
         self._lock = threading.Lock()
+        self._debounce_seconds = debounce_seconds
+        self._pending_save: bool = False
+        self._save_timer: threading.Timer | None = None
         self._load()
 
     # -- persistence --------------------------------------------------------
@@ -39,14 +42,35 @@ class SessionStore:
             self._data = {}
 
     def _save(self) -> None:
-        try:
-            os.makedirs(os.path.dirname(self._path), exist_ok=True)
-            tmp = self._path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self._path)
-        except Exception as err:
-            _LOGGER.warning("Failed to save sessions: %s", err)
+        """Debounced save: delays actual disk write to batch rapid changes."""
+        self._pending_save = True
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(self._debounce_seconds, self._do_save)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def _do_save(self) -> None:
+        """Actually write to disk (called by debounce timer)."""
+        with self._lock:
+            if not self._pending_save:
+                return
+            self._pending_save = False
+            try:
+                os.makedirs(os.path.dirname(self._path), exist_ok=True)
+                tmp = self._path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, self._path)
+            except Exception as err:
+                _LOGGER.warning("Failed to save sessions: %s", err)
+
+    def flush(self) -> None:
+        """Force immediate save to disk (e.g. before shutdown)."""
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+            self._save_timer = None
+        self._do_save()
 
     # -- public API ---------------------------------------------------------
 

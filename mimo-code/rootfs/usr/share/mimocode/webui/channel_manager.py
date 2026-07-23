@@ -11,29 +11,17 @@ import json
 import logging
 from typing import Any, AsyncIterator
 
-from client import MimoAIClient
+from client import MimoAIClient, MimoAPIError
 from session_store import SessionStore
 from ha_context import get_ha_context_builder
+from media import parse_reply_segments, TextSegment, ImageSegment, VoiceSegment, FileSegment, VideoSegment, GifSegment
+from base_channel import build_system_prompt, is_rate_limit, RATE_LIMIT_MESSAGE
+from evolution_review import get_evolution_review
 from feishu_client import FeishuClient
 from wechat_client import WeChatWorkClient
 from wechat_personal import PersonalWeChatClient, DEFAULT_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
-
-# Rate limit detection patterns (case-insensitive)
-_RATE_LIMIT_KEYWORDS = [
-    "排队等待", "token plan", "/login",
-    "subscribe", "free mode", "queue",
-    "rate limit", "too many requests",
-]
-
-RATE_LIMIT_MESSAGE = "AI 服务繁忙，请稍后再试。"
-
-
-def _is_rate_limit(text: str) -> bool:
-    """Detect mimo serve rate-limiting messages."""
-    lower = text.lower()
-    return any(kw in lower for kw in _RATE_LIMIT_KEYWORDS)
 
 # Default config file path
 DEFAULT_CONFIG_PATH = "/data/mimocode/mimo.json"
@@ -200,6 +188,7 @@ class ChannelManager:
             verification_token=config.get("verification_token"),
             encrypt_key=config.get("encrypt_key"),
             show_reasoning=bool(config.get("show_reasoning", True)),
+            on_message=self._handle_message,
         )
 
         client.start()
@@ -240,24 +229,9 @@ class ChannelManager:
         """Start Personal WeChat channel."""
         saved_creds = config.get("credentials", {})
 
-        # Save sync_buf to config whenever it changes
+        # Save sync_buf to config whenever it changes (async, non-blocking)
         def _on_state_change(new_buf: str) -> None:
-            try:
-                cfg = json.loads(open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8").read())
-            except Exception:
-                cfg = {"channels": {}}
-            if "personal_wechat" not in cfg.setdefault("channels", {}):
-                cfg["channels"]["personal_wechat"] = {"enabled": True}
-            if "credentials" not in cfg["channels"]["personal_wechat"]:
-                cfg["channels"]["personal_wechat"]["credentials"] = {}
-            cfg["channels"]["personal_wechat"]["credentials"]["get_updates_buf"] = new_buf
-            import os
-            try:
-                os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
-                with open(DEFAULT_CONFIG_PATH, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                _LOGGER.warning("Failed to persist sync_buf: %s", e)
+            asyncio.create_task(self._persist_sync_buf(new_buf))
 
         client = PersonalWeChatClient(
             on_message=self._handle_message,
@@ -269,7 +243,7 @@ class ChannelManager:
         )
 
         if saved_creds and client.load_credentials(saved_creds):
-            await client.start()
+            client.start()  # synchronous - starts a background thread
             channel_key = f"personal_wechat_{account_id}"
             self._channels[channel_key] = client
             _LOGGER.info("Personal WeChat channel started (from saved credentials): %s", account_id)
@@ -283,22 +257,61 @@ class ChannelManager:
             _LOGGER.info("Personal WeChat pending QR login: %s", account_id)
 
     # ------------------------------------------------------------------ #
+    # Persistence helpers
+    # ------------------------------------------------------------------ #
+
+    async def _persist_sync_buf(self, new_buf: str) -> None:
+        """Persist WeChat sync_buf to config file (async, non-blocking)."""
+        import os
+        try:
+            loop = asyncio.get_event_loop()
+            cfg = await loop.run_in_executor(None, self._read_config_file)
+            if "personal_wechat" not in cfg.setdefault("channels", {}):
+                cfg["channels"]["personal_wechat"] = {"enabled": True}
+            if "credentials" not in cfg["channels"]["personal_wechat"]:
+                cfg["channels"]["personal_wechat"]["credentials"] = {}
+            cfg["channels"]["personal_wechat"]["credentials"]["get_updates_buf"] = new_buf
+            await loop.run_in_executor(None, self._write_config_file, cfg)
+        except Exception as e:
+            _LOGGER.warning("Failed to persist sync_buf: %s", e)
+
+    @staticmethod
+    def _read_config_file() -> dict[str, Any]:
+        try:
+            with open(DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"channels": {}}
+
+    @staticmethod
+    def _write_config_file(cfg: dict[str, Any]) -> None:
+        import os
+        os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
+        with open(DEFAULT_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    # ------------------------------------------------------------------ #
     # Message handling (async)
     # ------------------------------------------------------------------ #
 
-    async def _handle_message(self, message: dict[str, Any]) -> str:
+    async def _handle_message(self, message: dict[str, Any], on_reasoning: Any = None) -> str:
         """Handle incoming message from any channel (async).
 
         Args:
             message: Message dictionary with text, sender_id, chat_id, etc.
+            on_reasoning: Optional callback for real-time reasoning push.
 
         Returns:
-            Response text to send back.
+            Response text to send back (plain text, media tags preserved).
         """
         text = message.get("text", "")
         sender_id = message.get("sender_id", "")
         chat_id = message.get("chat_id", "")
         account_id = message.get("account_id", "")
+
+        # Build context for AI including inbound media info
+        media_info = message.get("media_info", "")
+        ai_input = f"{text}\n{media_info}".strip() if media_info else text
 
         _LOGGER.info(
             "Processing message from %s/%s: %s",
@@ -308,7 +321,7 @@ class ChannelManager:
         )
 
         session_key = f"{sender_id}:{chat_id}" if chat_id else sender_id or "default"
-        response = await self._call_mimo_serve(text, session_key)
+        response = await self._call_mimo_serve(ai_input, session_key, on_reasoning=on_reasoning)
 
         return response
 
@@ -316,51 +329,95 @@ class ChannelManager:
         self,
         text: str,
         session_key: str = "default",
+        on_reasoning: Any = None,
     ) -> str:
         """Call mimo serve API to get AI response (async, via MimoAIClient).
 
         Uses session persistence across restarts via SessionStore.
         Injects HA device context into system prompt for smart responses.
+        Supports real-time reasoning push via on_reasoning callback.
 
         Args:
             text: User message text.
             session_key: Key for session persistence (e.g. "user_id:chat_id").
+            on_reasoning: Optional callback for real-time reasoning push.
 
         Returns:
             AI response text.
         """
         try:
             # 1. Restore session from persistence, or create new
-            session_id = self._session_store.get_session_id(session_key)
-            session_id = await self._mimo_client.ensure_session(session_id or "")
-            # Always write back (handles idempotent writes and id changes)
-            self._session_store.set_session_id(session_key, session_id)
+            stored_id = self._session_store.get_session_id(session_key)
+            session_id = stored_id if stored_id else ""
+            session_id = await self._mimo_client.ensure_session(session_id)
+            # Only write back if we got a valid session_id
+            if session_id:
+                self._session_store.set_session_id(session_key, session_id)
+            else:
+                _LOGGER.error("ensure_session returned empty session_id for key %s", session_key)
 
-            # 2. Build system prompt with HA device context
+            # 2. Build system prompt with HA device context + learned lessons
             ha_ctx = get_ha_context_builder()
             device_context = await ha_ctx.get_context()
-
-            system_prompt = (
-                "你是 Home Assistant 管家。根据用户请求控制设备或回答问题。\n"
-                "如果用户要求控制设备，直接调用对应工具。\n"
-                "回复要简洁友好。\n\n"
-                f"{device_context}"
-            )
+            evolution = get_evolution_review()
+            lessons_context = evolution.get_lessons_context()
+            system_prompt = build_system_prompt(device_context)
+            if lessons_context:
+                system_prompt = f"{system_prompt}\n\n{lessons_context}"
 
             # 3. Send message with system context
             _LOGGER.info(
                 "Calling mimo serve: session=%s, text=%s, system_len=%d",
                 session_id, text[:50], len(system_prompt),
             )
-            response = await self._mimo_client.send_message(
-                text, session_id, system=system_prompt
-            )
+
+            # Collect text events, push reasoning via callback (real-time, chunk by chunk)
+            collected_text = []
+
+            async def _on_event(event: dict) -> None:
+                if event.get("type") == "text":
+                    collected_text.append(event["text"])
+                elif event.get("type") == "reasoning":
+                    if on_reasoning:
+                        r = event.get("text", "").strip()
+                        if r:
+                            try:
+                                await on_reasoning(r)
+                            except Exception:
+                                pass
+
+            # Send message, retry with new session on 409 or 404
+            try:
+                await self._mimo_client.send_message(
+                    text, session_id, system=system_prompt, on_event=_on_event
+                )
+            except MimoAPIError as send_err:
+                if send_err.status in (409, 404):
+                    _LOGGER.warning("Session issue (HTTP %d), creating new session", send_err.status)
+                    session_id = await self._mimo_client.ensure_session("")
+                    if session_id:
+                        self._session_store.set_session_id(session_key, session_id)
+                        collected_text.clear()
+                        await self._mimo_client.send_message(
+                            text, session_id, system=system_prompt, on_event=_on_event
+                        )
+                else:
+                    raise
+
+            response = "\n".join(collected_text)
             _LOGGER.info("mimo serve returned: %s", response[:100] if response else "(empty)")
 
             # 4. Check for rate limiting
-            if response and _is_rate_limit(response):
+            if response and is_rate_limit(response):
                 _LOGGER.warning("MiMo rate-limited, returning fallback message")
                 return RATE_LIMIT_MESSAGE
+
+            # 5. Schedule evolution review (background, fire-and-forget)
+            if response:
+                evolution = get_evolution_review()
+                asyncio.create_task(
+                    evolution.schedule_review(text, response, self._mimo_client, session_id)
+                )
 
             return response or ""
 

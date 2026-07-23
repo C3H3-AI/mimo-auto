@@ -1,3 +1,0 @@
-#!/usr/bin/with-contenv bashio
-# Cleanup on service stop (if needed)
-exit 0

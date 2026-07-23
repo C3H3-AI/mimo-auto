@@ -9,6 +9,7 @@ import sys
 import urllib.request
 import urllib.error
 import re
+import shutil
 from socketserver import ThreadingMixIn
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,12 +20,19 @@ WEBUI_DIR = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(WEBUI_DIR, "dist")
 PORT = int(os.environ.get("WEBUI_PORT", "8099"))
 MIMO_WORKDIR = os.environ.get("MIMO_WORKDIR", "/data/mimocode")
-CONFIG_FILE = os.environ.get("MIMO_CONFIG", os.path.join(WEBUI_DIR, "mimo.json"))
-# Fallback: if the configured config file doesn't exist, try the data dir
-if not os.path.exists(CONFIG_FILE):
-    fallback = "/data/mimocode/mimo.json"
-    if os.path.exists(fallback):
-        CONFIG_FILE = fallback
+# Config (incl. WeChat login credentials) MUST live in the persistent volume,
+# never in the code dir (which is wiped on `ha addons update`).
+CONFIG_FILE = os.environ.get("MIMO_CONFIG", os.path.join(MIMO_WORKDIR, "mimo.json"))
+# Migrate a legacy config left in the (ephemeral) code dir so existing WeChat
+# login credentials survive the move to the persistent volume.
+_legacy_config = os.path.join(WEBUI_DIR, "mimo.json")
+if not os.path.exists(CONFIG_FILE) and os.path.exists(_legacy_config):
+    try:
+        os.makedirs(MIMO_WORKDIR, exist_ok=True)
+        shutil.copy2(_legacy_config, CONFIG_FILE)
+        _LOGGER.info("Migrated legacy config %s -> %s", _legacy_config, CONFIG_FILE)
+    except Exception as e:  # pragma: no cover - best effort migration
+        _LOGGER.warning("Failed to migrate legacy config: %s", e)
 
 
 def _build_config_from_env():
@@ -581,9 +589,7 @@ def _handle_wechat_login_status(self):
                                 "base_url": result.base_url,
                                 "account_id": result.account_id or "default",
                             })
-                            asyncio.run_coroutine_threadsafe(
-                                client.start(), _channel_manager_loop
-                            )
+                            client.start()  # synchronous - starts background thread
                             # Replace pending dict with actual client object so get_status() works
                             mgr._channels[key] = client
                             _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)

@@ -31,6 +31,14 @@ export WECHAT_ENCODING_AES_KEY=$(python3 -c "import json; d=json.load(open('/dat
 export PERSONAL_WECHAT_ENABLED=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(str(d.get('personal_wechat_enabled',False)).lower())")
 export HA_MCP_URL=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('ha_mcp_url',''))")
 
+# Overlay deployed code from the persistent volume /data/mimocode/webui.
+# deploy_reliable.sh writes the full webui there so code survives `ha addons update`
+# (which rebuilds the container from the image and would otherwise wipe docker-cp'd files).
+# To roll back a bad deploy: `docker exec $CONTAINER rm -rf /data/mimocode/webui`.
+if [ -d /data/mimocode/webui ] && [ -n "$(ls -A /data/mimocode/webui 2>/dev/null)" ]; then
+    cp -rf /data/mimocode/webui/. /usr/share/mimocode/webui/
+fi
+
 exec env \
     MIMO_PORT="${INNER_PORT}" \
     MIMO_CONFIG="/data/mimocode/mimo.json" \
