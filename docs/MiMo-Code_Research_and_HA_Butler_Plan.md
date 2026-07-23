@@ -415,3 +415,80 @@ HA 侧放一个静态目录托管 `SKILL.md`——**更新技能只需改 HA 上
 MiMo-Code **不是"需要被改造才能当 HA 管家"**，而是**已经内建了当管家+自升级的全部原语**：`evolve` 给自改能力、`skills.urls` 给远程下发、`loop` 给周期进化、`hooks` 给安全闸门、`mimo serve` 自带 Basic Auth。你真正要做的，是用这些原语**把 HA 领域知识封装成技能/工具/钩子**，并**把原版鉴权用起来**——而不是另起炉灶。
 
 最高优先级永远是 **T0 安全止血**（P0-A），其余按 T1→T5 渐进，自升级闭环在 T5 自然闭合。
+
+---
+
+## 十一、补充调研：首轮遗漏的关键技术维度（2026-07-24）
+
+首轮报告聚焦微内核运行时、`evolve`/`skills`/`hooks`/`loop` 与 `mimo serve` 鉴权，未深挖其余 ~50 个 src 模块。本次回仓库逐模块核查，发现 **6 项对「HA 管家 + 自升级」有颠覆性影响、首轮完全没覆盖的技术**。它们大幅简化了落地路径——尤其 MCP 直连可让 MiMo **原生调 HA 设备**，无需在 webui 手搓 HTTP。
+
+### 11.1 MCP 子系统（最重大遗漏）—— MiMo 原生就是 HA 客户端
+
+`packages/opencode/src/mcp/` + `config/mcp.ts` 是一套**完整的 MCP 客户端**，直接用官方 `@modelcontextprotocol/sdk`：
+
+- **两种 server 源**：`local`（stdio，跑本地进程）+ `remote`（`streamable-http` / `sse`，连远程 URL）。
+- **remote 内建 OAuth 2.0**：含 RFC 7591 动态客户端注册（`oauth-provider.ts` / `oauth-callback.ts`），`redirectUri` 默认 `http://127.0.0.1:19876/mcp/oauth/callback`。
+- **可从 Claude Code 配置导入**（`config/mcp.ts` 的 `fromClaude`）。
+- 事件总线广播 `mcp.tools.changed`，工具变化实时反映进模型上下文。
+
+**→ 对 HA 管家的改写**：你已部署的 `ha-mcp` 集成正是 **streamable HTTP 的 MCP server**。只需在 MiMo 的 MCP 配置里加一条 `remote` 指向 `http(s)://你的HA/mcp`（ha-mcp 已支持 OAuth/Bearer），**MiMo 就能自己调用 `ha.call_service` / `ha.get_state` 等全部工具**——之前方案里 T1「用 @mimo-ai/plugin 手搓 ha-call-service 工具」是**重复造轮子**，应改为直接接 ha-mcp。HA 设备控制、状态查询、自动化管理全部由 MiMo 原生 MCP 客户端承接。
+
+### 11.2 cron 定时引擎（比 loop 技能底层得多）
+
+`packages/opencode/src/cron/` 是完整定时子系统，远强于首轮提到的 `loop` 技能：
+
+- `cron-expr.ts`：标准 **cron 表达式**解析（非固定间隔）。
+- `cron-jitter.ts`：抖动，避免多实例惊群。
+- `cron-lock.ts`：分布式锁，`tryAcquireSchedulerLock`——**多实例部署安全**。
+- `scheduler.ts`：调度器，支持 `recurring` / `durable` 任务、`LoopEndedReason`（gate_off/model_stopped/aged_out/budget/error）。
+- `loop-file.ts` / `loop-state.ts` / `sentinel.ts`：loop 状态持久化与哨兵。
+
+**→ 对自升级的改写**：首轮 T5 写「loop 周期跑 evolve 审查」应改为**用 cron 引擎配标准 cron 表达式**（如 `0 3 * * 0` 每周日 3 点），更精确、可持久化、多实例不重复触发。
+
+### 11.3 Workflow 运行时 + QuickJS 沙箱（首轮只知「4 个内置工作流」）
+
+`packages/opencode/src/workflow/` 是一套**完整的 DAG 工作流引擎**，非简单脚本：
+
+- `runtime.ts`：支持 `phase()` / `log()` / `agent()` / `workflow()` 嵌套编排；**默认 16 并发、生命期上限 1000 个 agent**、wall-clock 预算 12h；支持隔离 `worktree`、journal 持久化、`structure tree` 可观测性。
+- `sandbox.ts`：真正的 **QuickJS WASM 沙箱**（singlefile 变体，base64 内联，bun 自包含）：**64 MiB 内存上限**、`deterministic` 模式（剥离 Date/Math.random 以支持 resume 重放）、`activeDeadlineMs`（只算活跃时间防挂死）。
+
+**→ 对自升级的改写**：`evolve` 的自我修改若放进 workflow 沙箱里跑，比裸 bash 安全得多——多 agent 协作、工具调用、代码生成都能被 64MiB 内存 + 12h 预算约束，是「自我进化」的理想执行环境。
+
+### 11.4 Agent 编排器 + Orchestrator 模式（多 agent 管家的一等公民）
+
+`packages/opencode/src/agent/agent.ts` 定义完整 agent：`mode`（subagent/primary/all）、`permission`、`hardPermission`、`toolAllowlist`、`model`。内置 `PROMPT_ORCHESTRATOR` / `PROMPT_DREAM` / `PROMPT_DISTILL` / `PROMPT_COMPACTION`。文档 `docs/harness/MiMo Orchestrator Mode.md` + `Agent Multi-Skill Workflow Orchestration Design.md` 描述多技能编排。
+
+**→ 对 HA 管家的改写**：「HA 管家」应设计为一个 **orchestrator agent**，带领专职子 agent——`ha-device-control`（接 ha-mcp）、`ha-safety-reviewer`（高危拦截）、`ha-memory-keeper`（记忆沉淀）。多 agent 协作是引擎原生能力，无需自研。
+
+### 11.5 permission 权限系统（HA 安全管家的原生闸门）
+
+`packages/opencode/src/permission/` 是三态权限引擎：
+
+- `Action = allow | deny | ask`；`Rule = { permission, pattern, action }` 模式匹配。
+- **询问可转发**：`forwardRef` + `inbox`——`ask` 类请求能转发给 orchestrator peer 或进 **inbox**。
+- **防挂死**：转发询问 `FORWARD_DENY_TIMEOUT_MS = 5min` 无人批自动 DENY；`MIMOCODE_SKIP_ALL_FORCED_ASK_TIMEOUT_MS` 控制无人值守强制询问超时。
+
+**→ 对 HA 安全管家的改写**：这正是首轮 T3「ha-safety hook + action_confirm」的**原生替代/增强**。定义规则 `{ permission: "ha.call_service", pattern: "lock/*|cover/*", action: "ask" }`，询问转发到 inbox → 你已部署的飞书/微信确认卡直接接上，**无需自己造 action_confirm 的转发链路**（action_confirm 可作为 inbox 确认的落地实现）。
+
+### 11.6 provider 自定义系统（可接本地模型）
+
+`config/provider.ts` 支持 `baseURL` 自定义 → 任何 **OpenAI-compatible 端点**（本地 Ollama / vLLM / 局域网模型）都能当 provider。
+
+**→ 对 HA 管家的改写**：「HA 管家」的轻量意图识别（"关灯""现在谁在家"）可用**本地模型**跑，省 API 费用、可离线；重度任务（写代码/复杂编排）才升舱到云端 MiMo。成本与隐私双优化。
+
+### 11.7 其余已确认存在但本次未深挖的模块
+
+`control-plane`（多实例控制平面）、`team`（多 agent 协作）、`effect`（基于 Effect-TS 的整个运行时）、`audio`（语音模块，非仅 ASR）、`lsp`（语言服务器，IDE 级代码智能）、`inbox`（agent 分叉收件箱）、`worktree`/`snapshot`（git 隔离/快照）、`metrics`（OpenTelemetry 可观测）、`bus`（事件总线）、`pty`（伪终端）。这些对「管家+自升级」非主线，但 `control-plane`+`team` 在规模化部署（多 HA 实例统一管家）时有价值。
+
+### 11.8 修订后的落地优先级（相对首轮 T0–T6）
+
+| 原方案 | 修订为 | 理由 |
+|---|---|---|
+| T1 手搓 ha-call-service 工具 | **T1 接 ha-mcp 为 remote MCP server** | 引擎原生 MCP 客户端，零代码 |
+| T3 自造 ha-safety hook + action_confirm | **T3 用 permission 规则 + inbox 转发** | 原生权限闸门，确认卡已部署 |
+| T5 loop 周期 evolve | **T5 cron 引擎配 cron 表达式** | 标准 cron、持久化、多实例锁 |
+| T6 drive-mimo 分离实例 | T6 升级为 **workflow 沙箱跑 evolve** | QuickJS 沙箱约束自改执行 |
+| （新增）| **T7 orchestrator 多 agent 管家** | 专职子 agent 分工 |
+| （新增）| **T8 provider 本地模型分流** | 省钱/离线 |
+
+安全止血 T0 仍为最高优先，其余顺次推进。

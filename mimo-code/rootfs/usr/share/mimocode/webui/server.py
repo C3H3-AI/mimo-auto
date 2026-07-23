@@ -172,9 +172,20 @@ class ThreadingMiMoServer(ThreadingMixIn, http.server.HTTPServer):
 
 
 class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
+    # HA ingress gateway IPs + localhost
+    INGRESS_ALLOW = {"172.30.32.2", "127.0.0.1", "::1"}
+
     def __init__(self, *args, **kwargs):
         static_dir = DIST_DIR if os.path.isdir(DIST_DIR) else WEBUI_DIR
         super().__init__(*args, directory=static_dir, **kwargs)
+
+    def _check_ingress(self) -> bool:
+        """Reject requests not from HA ingress or localhost."""
+        ip = self.client_address[0]
+        if ip not in self.INGRESS_ALLOW:
+            self.send_error(403, "Direct access denied; use HA ingress")
+            return False
+        return True
 
     def end_headers(self):
         try:
@@ -191,6 +202,8 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if not self._check_ingress():
+                return
             # Health check endpoint for Supervisor (only /healthcheck, not /)
             if self.path == "/healthcheck":
                 # Check if mimo serve is running
@@ -227,9 +240,7 @@ class MiMoProxyHandler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/api/fs/read"):
                 self._handle_fs_read()
                 return
-            if self.path.startswith("/api/fs/write"):
-                self._handle_fs_write()
-                return
+            # NOTE: /api/fs/write is NOT routed here — writes only via PUT
 
             # ---- Multi-account management page ----
             if self.path in ("/accounts", "/accounts/"):
@@ -290,6 +301,8 @@ a{color:#1976d2;text-decoration:none}
 
     def do_POST(self):
         try:
+            if not self._check_ingress():
+                return
             if self.path == "/api/channels":
                 self._handle_channels_post()
             elif self.path == "/api/channels/restart":
@@ -311,6 +324,8 @@ a{color:#1976d2;text-decoration:none}
 
     def do_DELETE(self):
         try:
+            if not self._check_ingress():
+                return
             if self.path.startswith("/api/accounts/"):
                 self._handle_accounts_delete()
             elif self.path.startswith("/api/"):
@@ -322,8 +337,12 @@ a{color:#1976d2;text-decoration:none}
 
     def do_PUT(self):
         try:
+            if not self._check_ingress():
+                return
             if self.path.startswith("/api/accounts/"):
                 self._handle_accounts_put()
+            elif self.path.startswith("/api/fs/write"):
+                self._handle_fs_write()
             elif self.path.startswith("/api/"):
                 self._proxy_request("PUT")
             else:
@@ -341,8 +360,12 @@ a{color:#1976d2;text-decoration:none}
             pass
 
     def do_OPTIONS(self):
+        origin = self.headers.get("Origin", "")
+        allowed = "null"
+        if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+            allowed = origin
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", allowed)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -379,10 +402,14 @@ a{color:#1976d2;text-decoration:none}
 
                 if is_stream and "ndjson" in content_type:
                     # Bug 2 fix: stream NDJSON back chunk by chunk instead of buffering all
+                    origin = self.headers.get("Origin", "")
+                    allowed = "null"
+                    if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+                        allowed = origin
                     self.send_response(resp.status)
                     self.send_header("Content-Type", "application/x-ndjson")
                     self.send_header("Transfer-Encoding", "chunked")
-                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Allow-Origin", allowed)
                     self.end_headers()
                     try:
                         while True:
@@ -427,19 +454,27 @@ a{color:#1976d2;text-decoration:none}
                         except (json.JSONDecodeError, Exception):
                             pass
 
+                    origin = self.headers.get("Origin", "")
+                    allowed = "null"
+                    if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+                        allowed = origin
                     self.send_response(resp.status)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Allow-Origin", allowed)
                     self.end_headers()
                     self.wfile.write(data)
 
         except urllib.error.HTTPError as e:
+            origin = self.headers.get("Origin", "")
+            allowed = "null"
+            if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+                allowed = origin
             self.send_response(e.code)
             data = e.read()
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Origin", allowed)
             self.end_headers()
             try:
                 self.wfile.write(data)
@@ -1511,10 +1546,14 @@ def _handle_channels_status(self) -> None:
     manager = _get_channel_manager()
     status = manager.get_status() if manager else {}
     payload = json.dumps({"status": status}).encode("utf-8")
+    origin = self.headers.get("Origin", "")
+    allowed = "null"
+    if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+        allowed = origin
     self.send_response(200)
     self.send_header("Content-Type", "application/json")
     self.send_header("Content-Length", str(len(payload)))
-    self.send_header("Access-Control-Allow-Origin", "*")
+    self.send_header("Access-Control-Allow-Origin", allowed)
     self.end_headers()
     self.wfile.write(payload)
 
@@ -1539,10 +1578,14 @@ def _handle_channels_get(self) -> None:
         "channels": channels,
         "status": status,
     }, ensure_ascii=False).encode("utf-8")
+    origin = self.headers.get("Origin", "")
+    allowed = "null"
+    if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+        allowed = origin
     self.send_response(200)
     self.send_header("Content-Type", "application/json")
     self.send_header("Content-Length", str(len(payload)))
-    self.send_header("Access-Control-Allow-Origin", "*")
+    self.send_header("Access-Control-Allow-Origin", allowed)
     self.end_headers()
     self.wfile.write(payload)
 
@@ -1622,10 +1665,14 @@ def _handle_feishu_test(self) -> None:
 def _send_json(self, code: int, obj: dict) -> None:
     """Helper to send a JSON response."""
     payload = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    origin = self.headers.get("Origin", "")
+    allowed = "null"
+    if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+        allowed = origin
     self.send_response(code)
     self.send_header("Content-Type", "application/json")
     self.send_header("Content-Length", str(len(payload)))
-    self.send_header("Access-Control-Allow-Origin", "*")
+    self.send_header("Access-Control-Allow-Origin", allowed)
     self.end_headers()
     self.wfile.write(payload)
 
@@ -1636,7 +1683,7 @@ def _send_json(self, code: int, obj: dict) -> None:
 def _sanitize_fs_path(raw: str) -> str | None:
     """Resolve and validate a filesystem path. Returns None if path is outside allowed dirs."""
     from pathlib import Path
-    ALLOWED_PREFIXES = ["/data", "/config", "/usr/share/mimocode"]
+    ALLOWED_PREFIXES = ["/data/mimocode", "/usr/share/mimocode"]
     try:
         p = Path(raw).resolve()
         for prefix in ALLOWED_PREFIXES:
@@ -1699,10 +1746,14 @@ def _handle_fs_read(self) -> None:
             self._send_json(404, {"error": "file not found"})
             return
         content = p.read_bytes()
+        origin = self.headers.get("Origin", "")
+        allowed = "null"
+        if origin and ("172.30.32" in origin or "homeassistant" in origin or "localhost" in origin):
+            allowed = origin
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(content)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", allowed)
         self.end_headers()
         self.wfile.write(content)
     except Exception as e:
