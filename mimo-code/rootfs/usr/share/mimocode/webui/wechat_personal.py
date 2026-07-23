@@ -12,7 +12,6 @@ import base64
 import hashlib
 import json
 import logging
-import threading
 import time
 from typing import Any, Callable, Awaitable
 from uuid import uuid4
@@ -313,39 +312,26 @@ class PersonalWeChatClient:
         remaining = self._pause_until - time.time()
         return remaining if remaining > 0 else 0.0
 
-    def start(self) -> None:
-        """Start message receiving loop in a background thread with its own event loop.
-
-        Uses a dedicated thread + event loop (same pattern as FeishuClient)
-        to avoid task-scheduling issues with asyncio.create_task() during
-        run_until_complete().
-        """
+    async def start(self) -> None:
+        """Start message receiving loop as an asyncio task (single event loop)."""
         if not self._logged_in:
             _LOGGER.error("Cannot start: not logged in")
             return
 
         self._running = True
         self._status = "connected"
-        self._loop_thread = threading.Thread(target=self._run_message_loop, daemon=True, name="wechat_poll")
-        self._loop_thread.start()
-        _LOGGER.info("WeChat message loop started (thread)")
-
-    def _run_message_loop(self) -> None:
-        """Run _message_loop in its own event loop (daemon thread)."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._message_loop())
-        except Exception as err:
-            _LOGGER.error("WeChat message loop thread crashed: %s", err)
-            import traceback
-            _LOGGER.error("WeChat message loop traceback: %s", traceback.format_exc())
-        finally:
-            loop.close()
+        self._poll_task = asyncio.create_task(self._message_loop())
+        _LOGGER.info("WeChat message loop started (asyncio task)")
 
     async def stop(self) -> None:
         """Stop message receiving loop."""
         self._running = False
+        if hasattr(self, '_poll_task') and self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            try:
+                await asyncio.wait_for(self._poll_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     async def _message_loop(self) -> None:
         """Long poll for new messages with retry backoff + session expiry."""

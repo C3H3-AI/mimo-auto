@@ -18,8 +18,7 @@ import queue
 import sys
 import threading
 import time
-from client import MimoAIClient
-from session_store import SessionStore
+
 from media import parse_reply_segments, TextSegment, ImageSegment, VoiceSegment, FileSegment, VideoSegment, GifSegment, CardSegment
 from media_utils import resolve_media_source, download_url_source, compress_image, upload_feishu_image, upload_feishu_file
 from card import parse_card_source, build_feishu_card
@@ -55,6 +54,7 @@ class FeishuClient:
         encrypt_key: str | None = None,
         show_reasoning: bool = True,
         on_message: Any = None,
+        channel_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
@@ -63,9 +63,9 @@ class FeishuClient:
         self._encrypt_key = encrypt_key
         self._show_reasoning = show_reasoning
         self._on_message = on_message
+        self._channel_loop = channel_loop
 
         # Instance-level state (not shared across instances)
-        self._session_store = SessionStore()
         self._model_name: str = "MiMo Code"
         self._seen_message_ids: OrderedDict[str, None] = OrderedDict()
         self._seen_limit = 512
@@ -80,9 +80,6 @@ class FeishuClient:
         self._api_client = None
         self._last_error: str | None = None
         self._msg_queue: queue.Queue = queue.Queue()
-        self._mimo_client = MimoAIClient(base_url=mimo_serve_url)
-        # Load persisted session IDs
-        self._load_sessions()
 
     # ------------------------------------------------------------------ #
     # Status
@@ -298,44 +295,62 @@ class FeishuClient:
     # Worker thread: process messages from queue
     # ------------------------------------------------------------------ #
     def _worker_loop(self) -> None:
-        """Worker thread: own event loop, pull messages from queue, call AI, send replies."""
+        """Worker thread: own event loop, pull messages from queue, call AI, send replies.
+
+        Uses a single run_until_complete(self._worker_main()) so the task context
+        is stable across all messages (required by Python 3.14+ where asyncio.timeout()
+        inside aiohttp demands a persistent task context, not recreated per message).
+        """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            while self._running and not self._stop_flag:
-                try:
-                    msg = self._msg_queue.get(timeout=2)
-                except queue.Empty:
-                    continue
-
-                try:
-                    text = msg["text"]
-                    chat_type = msg["chat_type"]
-                    chat_id = msg["chat_id"]
-                    open_id = msg["open_id"]
-
-                    # Build reply closure for this message
-                    async def reply_fn(reply_text: str, as_card: bool = False, _ct=chat_type, _cid=chat_id, _oid=open_id) -> str | None:
-                        try:
-                            return await self._reply(_ct, _cid, _oid, reply_text, as_card)
-                        except Exception as e:
-                            _LOGGER.error("飞书回复失败: %s", e)
-                            return None
-
-                    loop.run_until_complete(
-                        self._call_mimo_async(text, user_id=open_id, conv_id=chat_id, reply_fn=reply_fn)
-                    )
-                except Exception as err:
-                    _LOGGER.error("工作线程处理出错: %s", err)
+            loop.run_until_complete(self._worker_main())
+        except Exception as err:
+            _LOGGER.error("Worker main loop crashed: %s", err)
+            import traceback
+            _LOGGER.error("Worker traceback: %s", traceback.format_exc())
         finally:
             loop.close()
+
+    async def _worker_main(self) -> None:
+        """Async worker main loop (runs inside a single task context).
+
+        Each message: call AI → send reply via Feishu API.
+        """
+        while self._running and not self._stop_flag:
+            try:
+                msg = self._msg_queue.get(timeout=2)
+            except queue.Empty:
+                continue
+
+            try:
+                text = msg["text"]
+                chat_type = msg["chat_type"]
+                chat_id = msg["chat_id"]
+                open_id = msg["open_id"]
+
+                # reply_fn sends reply back to Feishu
+                async def _reply_fn(reply_text: str, as_card: bool = False) -> str | None:
+                    try:
+                        return await self._reply(chat_type, chat_id, open_id, reply_text, as_card)
+                    except Exception as e:
+                        _LOGGER.error("飞书回复失败: %s", e)
+                        return None
+
+                await self._call_mimo_async(text, user_id=open_id, conv_id=chat_id, reply_fn=_reply_fn)
+            except Exception as err:
+                _LOGGER.error("工作线程处理出错: %s", err)
 
     # ------------------------------------------------------------------ #
     # MiMo serve (via channel_manager 统一路径)
     # ------------------------------------------------------------------ #
     async def _call_mimo_async(self, text: str, user_id: str = "", conv_id: str = "",
                     reply_fn: Any = None) -> str:
-        """Call mimo serve via channel_manager (async version)."""
+        """Call mimo serve via channel_manager (async version).
+
+        Routes the AI call through the channel event loop to ensure all aiohttp
+        calls share the same event loop (avoids cross-loop Future errors).
+        """
         try:
             # Build message dict for channel_manager
             message = {
@@ -363,8 +378,16 @@ class FeishuClient:
                     except Exception:
                         pass
 
-            # Call channel_manager._handle_message (unified path)
-            response = await self._on_message(message, on_reasoning=_on_reasoning)
+            # Call channel_manager._handle_message on the channel event loop
+            if self._channel_loop and self._channel_loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(
+                    self._on_message(message, on_reasoning=_on_reasoning),
+                    self._channel_loop,
+                )
+                response = await asyncio.wrap_future(future)
+            else:
+                # Fallback: direct call (same loop)
+                response = await self._on_message(message, on_reasoning=_on_reasoning)
 
             # Send final response
             if response and reply_fn:

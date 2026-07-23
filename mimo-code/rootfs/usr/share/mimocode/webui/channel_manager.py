@@ -1,7 +1,8 @@
 """Channel manager for MiMo Code Addon.
 
 Manages multiple IM channel connections (Feishu, WeChat Work, Personal WeChat)
-and routes messages to mimo serve.
+and routes messages to mimo serve. All channels run in the same asyncio event loop.
+Supports multi-account per channel type.
 """
 
 from __future__ import annotations
@@ -9,10 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator
+from typing import Any
 
 from client import MimoAIClient, MimoAPIError
-from session_store import SessionStore
+from session_manager import MimoSessionManager
 from ha_context import get_ha_context_builder
 from media import parse_reply_segments, TextSegment, ImageSegment, VoiceSegment, FileSegment, VideoSegment, GifSegment
 from base_channel import build_system_prompt, is_rate_limit, RATE_LIMIT_MESSAGE
@@ -23,15 +24,15 @@ from wechat_personal import PersonalWeChatClient, DEFAULT_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
 
-# Default config file path
 DEFAULT_CONFIG_PATH = "/data/mimocode/mimo.json"
 
 
 class ChannelManager:
     """Manages IM channel connections.
 
-    Loads channel configuration, starts channel clients,
-    and routes messages to mimo serve via MimoAIClient (async).
+    All channels run as asyncio tasks in a single event loop.
+    Uses MimoSessionManager for session persistence.
+    Supports multi-account (multiple WeChat/Feishu instances).
     """
 
     def __init__(
@@ -39,18 +40,12 @@ class ChannelManager:
         config: dict[str, Any],
         mimo_serve_url: str = "http://127.0.0.1:14095",
     ) -> None:
-        """Initialize the channel manager.
-
-        Args:
-            config: Channel configuration dictionary.
-            mimo_serve_url: URL of mimo serve API.
-        """
         self._config = config
         self._mimo_serve_url = mimo_serve_url
         self._channels: dict[str, Any] = {}
         self._running = False
         self._mimo_client = MimoAIClient(base_url=mimo_serve_url)
-        self._session_store = SessionStore()
+        self._session_manager = MimoSessionManager()
 
     @classmethod
     def from_config_file(
@@ -58,17 +53,7 @@ class ChannelManager:
         config_path: str = DEFAULT_CONFIG_PATH,
         mimo_serve_url: str = "http://127.0.0.1:14095",
     ) -> "ChannelManager":
-        """Create ChannelManager from config file.
-
-        Args:
-            config_path: Path to mimo.json config file.
-            mimo_serve_url: URL of mimo serve API.
-
-        Returns:
-            ChannelManager instance.
-        """
         config = {}
-
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -76,23 +61,21 @@ class ChannelManager:
             _LOGGER.info("Config file not found: %s", config_path)
         except json.JSONDecodeError as err:
             _LOGGER.error("Failed to parse config: %s", err)
-
         return cls(config, mimo_serve_url)
 
     async def start(self) -> None:
-        """Start all enabled channels."""
+        """Start all enabled channels (single event loop)."""
         if self._running:
             return
-
         self._running = True
         channels_config = self._config.get("channels", {})
 
-        # Start Feishu if configured
+        # Start Feishu
         feishu_config = channels_config.get("feishu", {})
         if feishu_config.get("enabled", False):
             await self._start_feishu(feishu_config)
 
-        # Start WeChat Work accounts (supports multiple)
+        # Start WeChat Work (multi-account: dict or list)
         wechat_config = channels_config.get("wechat", {})
         if isinstance(wechat_config, dict):
             if wechat_config.get("enabled", False):
@@ -103,7 +86,7 @@ class ChannelManager:
                     account_id = account.get("id", f"wechat_{len(self._channels)}")
                     await self._start_wechat(account, account_id=account_id)
 
-        # Start Personal WeChat (supports multiple)
+        # Start Personal WeChat (multi-account: dict or list)
         personal_wechat_config = channels_config.get("personal_wechat", {})
         if isinstance(personal_wechat_config, dict):
             if personal_wechat_config.get("enabled", False):
@@ -126,7 +109,6 @@ class ChannelManager:
     async def stop(self) -> None:
         """Stop all channels."""
         self._running = False
-
         for name, client in self._channels.items():
             try:
                 if isinstance(client, dict):
@@ -148,35 +130,27 @@ class ChannelManager:
         await self.start()
 
     def get_status(self) -> dict[str, Any]:
-        """Return a status dict for each known channel."""
+        """Return status for each channel."""
         status: dict[str, Any] = {}
         for name, client in self._channels.items():
             if isinstance(client, dict):
-                ch_status = client.get("status", "pending")
                 status[name] = {
-                    "connected": ch_status == "connected",
-                    "status": ch_status,
+                    "connected": client.get("status") == "connected",
+                    "status": client.get("status", "pending"),
                 }
             else:
-                status_str = getattr(client, "connection_status", None)
-                if status_str:
-                    status[name] = {
-                        "connected": status_str == "connected",
-                        "status": status_str,
-                        "error": getattr(client, "last_error", None),
-                    }
-                else:
-                    status[name] = {
-                        "connected": bool(getattr(client, "is_connected", False) or getattr(client, "is_logged_in", False)),
-                        "error": getattr(client, "last_error", None),
-                    }
+                s = client.get_status() if hasattr(client, 'get_status') else {}
+                status[name] = s if s else {"connected": False, "status": "unknown"}
         return status
 
+    # ------------------------------------------------------------------ #
+    # Channel starters (each returns channel with BaseChannel interface)
+    # ------------------------------------------------------------------ #
+
     async def _start_feishu(self, config: dict[str, Any]) -> None:
-        """Start Feishu channel (WebSocket long-connection, self-contained)."""
+        """Start Feishu channel."""
         app_id = config.get("app_id", "")
         app_secret = config.get("app_secret", "")
-
         if not app_id or not app_secret:
             _LOGGER.warning("Feishu channel missing app_id or app_secret")
             return
@@ -189,9 +163,9 @@ class ChannelManager:
             encrypt_key=config.get("encrypt_key"),
             show_reasoning=bool(config.get("show_reasoning", True)),
             on_message=self._handle_message,
+            channel_loop=asyncio.get_event_loop(),
         )
-
-        client.start()
+        client.start()  # sync (lark-oapi WS SDK needs thread)
         self._channels["feishu"] = client
         _LOGGER.info("Feishu channel started")
 
@@ -204,10 +178,7 @@ class ChannelManager:
         encoding_aes_key = config.get("encoding_aes_key", "")
 
         if not corp_id or not agent_id or not secret:
-            _LOGGER.warning(
-                "WeChat Work channel missing corp_id, agent_id, or secret: %s",
-                account_id,
-            )
+            _LOGGER.warning("WeChat Work channel missing config: %s", account_id)
             return
 
         client = WeChatWorkClient(
@@ -219,7 +190,6 @@ class ChannelManager:
             on_message=self._handle_message,
             account_id=account_id,
         )
-
         await client.start()
         channel_key = f"wechat_{account_id}"
         self._channels[channel_key] = client
@@ -229,7 +199,6 @@ class ChannelManager:
         """Start Personal WeChat channel."""
         saved_creds = config.get("credentials", {})
 
-        # Save sync_buf to config whenever it changes (async, non-blocking)
         def _on_state_change(new_buf: str) -> None:
             asyncio.create_task(self._persist_sync_buf(new_buf))
 
@@ -243,7 +212,7 @@ class ChannelManager:
         )
 
         if saved_creds and client.load_credentials(saved_creds):
-            client.start()  # synchronous - starts a background thread
+            await client.start()
             channel_key = f"personal_wechat_{account_id}"
             self._channels[channel_key] = client
             _LOGGER.info("Personal WeChat channel started (from saved credentials): %s", account_id)
@@ -261,7 +230,6 @@ class ChannelManager:
     # ------------------------------------------------------------------ #
 
     async def _persist_sync_buf(self, new_buf: str) -> None:
-        """Persist WeChat sync_buf to config file (async, non-blocking)."""
         import os
         try:
             loop = asyncio.get_event_loop()
@@ -291,72 +259,57 @@ class ChannelManager:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     # ------------------------------------------------------------------ #
-    # Message handling (async)
+    # Unified message handling (single event loop, single MimoAIClient)
     # ------------------------------------------------------------------ #
 
     async def _handle_message(self, message: dict[str, Any], on_reasoning: Any = None) -> str:
         """Handle incoming message from any channel (async).
 
         Args:
-            message: Message dictionary with text, sender_id, chat_id, etc.
+            message: Message dict with text, sender_id, chat_id, channel_key.
             on_reasoning: Optional callback for real-time reasoning push.
 
         Returns:
-            Response text to send back (plain text, media tags preserved).
+            Response text to send back.
         """
         text = message.get("text", "")
+        channel_key = message.get("channel_key", "")
         sender_id = message.get("sender_id", "")
         chat_id = message.get("chat_id", "")
         account_id = message.get("account_id", "")
 
-        # Build context for AI including inbound media info
+        # Build channel_key if not already set
+        if not channel_key:
+            channel_key = f"{sender_id}:{chat_id}" if chat_id else sender_id or "default"
+
         media_info = message.get("media_info", "")
         ai_input = f"{text}\n{media_info}".strip() if media_info else text
 
         _LOGGER.info(
             "Processing message from %s/%s: %s",
-            account_id or "unknown",
-            sender_id,
-            text[:100],
+            account_id or "unknown", sender_id, text[:100],
         )
 
-        session_key = f"{sender_id}:{chat_id}" if chat_id else sender_id or "default"
-        response = await self._call_mimo_serve(ai_input, session_key, on_reasoning=on_reasoning)
-
-        return response
+        return await self._call_mimo_serve(ai_input, channel_key, on_reasoning=on_reasoning)
 
     async def _call_mimo_serve(
         self,
         text: str,
-        session_key: str = "default",
+        channel_key: str = "default",
         on_reasoning: Any = None,
     ) -> str:
-        """Call mimo serve API to get AI response (async, via MimoAIClient).
+        """Call mimo serve API via unified session manager.
 
-        Uses session persistence across restarts via SessionStore.
-        Injects HA device context into system prompt for smart responses.
-        Supports real-time reasoning push via on_reasoning callback.
-
-        Args:
-            text: User message text.
-            session_key: Key for session persistence (e.g. "user_id:chat_id").
-            on_reasoning: Optional callback for real-time reasoning push.
-
-        Returns:
-            AI response text.
+        All aiohttp calls run in the same event loop, avoiding cross-loop Future errors.
+        Session is managed by MimoSessionManager with 409 retry support.
         """
         try:
-            # 1. Restore session from persistence, or create new
-            stored_id = self._session_store.get_session_id(session_key)
-            session_id = stored_id if stored_id else ""
-            session_id = await self._mimo_client.ensure_session(session_id)
-            # Only write back if we got a valid session_id
-            if session_id:
-                self._session_store.set_session_id(session_key, session_id)
-            else:
-                _LOGGER.error("ensure_session returned empty session_id for key %s", session_key)
+            # 1. Get or create session for this channel_key
+            session_id = await self._session_manager.get_or_create_session(
+                self._mimo_client, channel_key
+            )
 
-            # 2. Build system prompt with HA device context + learned lessons
+            # 2. Build system prompt
             ha_ctx = get_ha_context_builder()
             device_context = await ha_ctx.get_context()
             evolution = get_evolution_review()
@@ -365,13 +318,12 @@ class ChannelManager:
             if lessons_context:
                 system_prompt = f"{system_prompt}\n\n{lessons_context}"
 
-            # 3. Send message with system context
+            # 3. Send message (stream NDJSON)
             _LOGGER.info(
                 "Calling mimo serve: session=%s, text=%s, system_len=%d",
                 session_id, text[:50], len(system_prompt),
             )
 
-            # Collect text events, push reasoning via callback (real-time, chunk by chunk)
             collected_text = []
 
             async def _on_event(event: dict) -> None:
@@ -386,33 +338,36 @@ class ChannelManager:
                             except Exception:
                                 pass
 
-            # Send message, retry with new session on 409 or 404
+            # Send message with auto-retry on 409/404
             try:
                 await self._mimo_client.send_message(
                     text, session_id, system=system_prompt, on_event=_on_event
                 )
             except MimoAPIError as send_err:
                 if send_err.status in (409, 404):
-                    _LOGGER.warning("Session issue (HTTP %d), creating new session", send_err.status)
-                    session_id = await self._mimo_client.ensure_session("")
-                    if session_id:
-                        self._session_store.set_session_id(session_key, session_id)
-                        collected_text.clear()
-                        await self._mimo_client.send_message(
-                            text, session_id, system=system_prompt, on_event=_on_event
-                        )
+                    _LOGGER.warning(
+                        "Session %s busy/lost (HTTP %d), creating new session",
+                        session_id, send_err.status,
+                    )
+                    session_id = await self._session_manager.get_or_create_session(
+                        self._mimo_client, channel_key
+                    )
+                    collected_text.clear()
+                    await self._mimo_client.send_message(
+                        text, session_id, system=system_prompt, on_event=_on_event
+                    )
                 else:
                     raise
 
             response = "\n".join(collected_text)
             _LOGGER.info("mimo serve returned: %s", response[:100] if response else "(empty)")
 
-            # 4. Check for rate limiting
+            # 4. Check rate limit
             if response and is_rate_limit(response):
                 _LOGGER.warning("MiMo rate-limited, returning fallback message")
                 return RATE_LIMIT_MESSAGE
 
-            # 5. Schedule evolution review (background, fire-and-forget)
+            # 5. Schedule evolution review (fire-and-forget)
             if response:
                 evolution = get_evolution_review()
                 asyncio.create_task(
@@ -427,16 +382,18 @@ class ChannelManager:
 
     @property
     def is_running(self) -> bool:
-        """Check if any channel is running."""
         return self._running and len(self._channels) > 0
 
     @property
     def channels(self) -> dict[str, Any]:
-        """Get active channels."""
         return self._channels.copy()
 
+    @property
+    def session_manager(self) -> MimoSessionManager:
+        return self._session_manager
+
     def get_pending_logins(self) -> dict[str, Any]:
-        """Get channels pending QR code login."""
+        """Get channels pending QR code login (for multi-account support)."""
         pending = {}
         for key, value in self._channels.items():
             if isinstance(value, dict) and value.get("status") == "pending_login":

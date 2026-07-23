@@ -589,13 +589,12 @@ def _handle_wechat_login_status(self):
                                 "base_url": result.base_url,
                                 "account_id": result.account_id or "default",
                             })
-                            client.start()  # synchronous - starts background thread
-                            # Replace pending dict with actual client object so get_status() works
-                            mgr._channels[key] = client
-                            _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
-
-                            # Send welcome message to establish conversation
-                            async def send_welcome():
+                            # Start client + replace pending dict on the channel event loop
+                            async def _activate():
+                                nonlocal client, key, mgr
+                                await client.start()
+                                mgr._channels[key] = client
+                                _LOGGER.info("Personal WeChat channel activated: %s", result.account_id)
                                 try:
                                     await client.send_text(
                                         to_user_id=result.user_id,
@@ -605,7 +604,7 @@ def _handle_wechat_login_status(self):
                                 except Exception as e:
                                     _LOGGER.warning("Failed to send welcome: %s", e)
                             asyncio.run_coroutine_threadsafe(
-                                send_welcome(), _channel_manager_loop
+                                _activate(), _channel_manager_loop
                             )
                             break
 
