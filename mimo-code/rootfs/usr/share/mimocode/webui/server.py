@@ -930,7 +930,8 @@ def _handle_accounts_post(self) -> None:
         # Add WeChat Work account with provided config
         self._handle_add_wechat_work(data)
     elif ch_type == "feishu":
-        self._send_json(400, {"error": "飞书目前仅支持单账号，请通过设置页面配置"})
+        # Add Feishu account
+        self._handle_add_feishu(data)
     else:
         self._send_json(400, {"error": f"Unsupported: {ch_type}"})
 
@@ -1019,6 +1020,39 @@ def _handle_add_wechat_work(self, data: dict) -> None:
         self._send_json(200, {
             "success": True,
             "account": {"type": "wechat", "id": account_id, "label": label},
+        })
+    else:
+        self._send_json(500, {"error": "保存配置失败"})
+
+
+def _handle_add_feishu(self, data: dict) -> None:
+    """Add a new Feishu account."""
+    app_id = (data.get("app_id") or "").strip()
+    app_secret = (data.get("app_secret") or "").strip()
+    label = (data.get("label") or "").strip() or f"飞书 {app_id[:8]}"
+    enabled = bool(data.get("enabled", True))
+
+    if not app_id or not app_secret:
+        self._send_json(400, {"error": "缺少必要参数: app_id, app_secret"})
+        return
+
+    import uuid
+    account_id = f"fs_{uuid.uuid4().hex[:8]}"
+
+    accounts = _ensure_accounts_list(_read_stored_config().get("channels", {}), "feishu")
+    accounts.append({
+        "id": account_id,
+        "label": label,
+        "enabled": enabled,
+        "app_id": app_id,
+        "app_secret": app_secret,
+        "show_reasoning": True,
+    })
+
+    if _save_multi_account_config(accounts, "feishu"):
+        self._send_json(200, {
+            "success": True,
+            "account": {"type": "feishu", "id": account_id, "label": label},
         })
     else:
         self._send_json(500, {"error": "保存配置失败"})
