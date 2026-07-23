@@ -6,6 +6,7 @@ url: https://github.com/C3H3-AI/mimo-auto
 arch:
   - aarch64
   - amd64
+image: ghcr.io/c3h3-ai/mimo-code/{arch}
 init: false
 ingress: true
 ingress_port: 8099
