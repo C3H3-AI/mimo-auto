@@ -4,6 +4,17 @@
 
 > Beta 预览版，用于早期测试。建议通过 Addon 测试通道单独验证后再合入稳定版。
 
+### 🧪 Beta 并存加载项
+
+- 新增 `mimo-code-beta` 独立加载项（slug: `mimo-code-beta`），与稳定版 `mimo-code` **并存运行**
+  - 复用同一预构建镜像 `ghcr.io/c3h3-ai/mimo-code/{arch}:5.2.0-beta`，不重复构建
+  - 独立数据目录 `/addon_configs/mimo-code-beta/`、独立 ingress 入口，互不影响
+  - 用途：在不干扰生产实例的前提下单独测试 beta 功能（设备面板、安全加固）
+  - 安装：HA 加载项商店刷新仓库后即可看到「MiMo Code (Beta)」
+
+
+> Beta 预览版，用于早期测试。建议通过 Addon 测试通道单独验证后再合入稳定版。
+
 ### ✨ 新功能
 
 - **WebUI 设备控制面板** — 新增 `/api/devices` 端点，WebUI 可直接查看并控制 HA 设备
