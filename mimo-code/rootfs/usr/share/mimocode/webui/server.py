@@ -359,6 +359,8 @@ a{color:#1976d2;text-decoration:none}
 
     def do_PATCH(self):
         try:
+            if not self._check_ingress():
+                return
             if self.path.startswith("/api/"):
                 self._proxy_request("PATCH")
             else:
@@ -1885,10 +1887,11 @@ def _handle_fs_write(self) -> None:
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
         from pathlib import Path
-        p = Path(file_path).resolve()
+        # Use the validated/sanitized path, NOT the raw user-supplied one.
+        p = Path(safe)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(body)
-        self._send_json(200, {"success": True, "path": file_path})
+        self._send_json(200, {"success": True, "path": safe})
     except Exception as e:
         self._send_json(500, {"error": str(e)})
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## v5.2.0-beta (2026-07-24)
+
+> Beta 预览版，用于早期测试。建议通过 Addon 测试通道单独验证后再合入稳定版。
+
+### ✨ 新功能
+
+- **WebUI 设备控制面板** — 新增 `/api/devices` 端点，WebUI 可直接查看并控制 HA 设备
+
+### 🔧 修复
+
+- **ha_context 401 错误** — Supervisor API 改用 `X-Supervisor-Token` 而非 `Authorization: Bearer`，修复 Addon 调用 Supervisor API 鉴权失败
+- **WebUI 安全加固（server.py）**
+  - `do_PATCH` 补齐 ingress 来源校验（`_check_ingress()`），堵住唯一缺失鉴权码的写入口
+  - `fs_write` 使用已校验的 `safe` 路径替代原始用户输入路径，防止路径穿越
+
+### 📦 其他
+
+- 新增 `docs/AUDIT_REPORT_2026-07-24.md` 安全审计报告
+
 ## v5.0.1 (2026-07-23)
 
 ### 修复
